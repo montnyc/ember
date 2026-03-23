@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildWorkPrompt, buildReviewPrompt, buildGatePrompt } from "../prompts";
+import { buildWorkPrompt } from "../prompts";
 import { DEFAULT_CONFIG } from "../config";
 import type { PrdState, SliceState } from "../types";
 
@@ -38,10 +38,9 @@ const slice: SliceState = {
 };
 
 describe("buildWorkPrompt", () => {
-  test("includes slice id and PRD title", () => {
-    const prompt = buildWorkPrompt(slice, prd, "# Memory", DEFAULT_CONFIG);
-    expect(prompt).toContain("001:tracer-1");
-    expect(prompt).toContain("Authentication");
+  test("includes PRD file reference", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
+    expect(prompt).toContain("@docs/prd/001-auth.md");
   });
 
   test("includes criteria text", () => {
@@ -50,53 +49,25 @@ describe("buildWorkPrompt", () => {
     expect(prompt).toContain("User can sign in");
   });
 
-  test("includes tracer instructions for tracer slices", () => {
+  test("marks current criterion with YOUR TASK", () => {
     const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
-    expect(prompt).toContain("TRACER");
-    expect(prompt).toContain("critical path");
+    expect(prompt).toContain("[YOU]");
+    expect(prompt).toContain("YOUR TASK");
   });
 
-  test("excludes tracer instructions for expand slices", () => {
-    const expandSlice = { ...slice, kind: "expand" as const };
-    const prompt = buildWorkPrompt(expandSlice, prd, "", DEFAULT_CONFIG);
-    expect(prompt).not.toContain("TRACER");
-  });
-
-  test("instructs model not to commit by default", () => {
+  test("tells Claude to commit", () => {
     const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
-    expect(prompt).toContain("Do NOT create git commits");
-  });
-
-  test("instructs model to commit with allowCommits", () => {
-    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG, true);
     expect(prompt).toContain("Create a git commit");
     expect(prompt).toContain("[ember:001:tracer-1]");
   });
-});
 
-describe("buildReviewPrompt", () => {
-  test("includes diff", () => {
-    const prompt = buildReviewPrompt(slice, prd, "+new line");
-    expect(prompt).toContain("+new line");
+  test("includes progress count", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
+    expect(prompt).toContain("0/1 acceptance criteria complete");
   });
 
-  test("truncates large diffs", () => {
-    const largeDiff = "x".repeat(60000);
-    const prompt = buildReviewPrompt(slice, prd, largeDiff);
-    expect(prompt).toContain("truncated");
-  });
-});
-
-describe("buildGatePrompt", () => {
-  test("includes JSON schema", () => {
-    const prompt = buildGatePrompt(slice, prd, "looks good", "all pass", true);
-    expect(prompt).toContain('"verdict"');
-    expect(prompt).toContain('"criteriaCompleted"');
-  });
-
-  test("warns when checks fail", () => {
-    const prompt = buildGatePrompt(slice, prd, "ok", "FAIL", false);
-    expect(prompt).toContain("Checks FAILED");
-    expect(prompt).toContain("MUST NOT");
+  test("includes memory", () => {
+    const prompt = buildWorkPrompt(slice, prd, "some memory", DEFAULT_CONFIG);
+    expect(prompt).toContain("some memory");
   });
 });
