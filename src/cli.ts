@@ -35,6 +35,9 @@ async function main() {
     case "status":
       await cmdStatus();
       break;
+    case "install-skill":
+      await import("./install-skill");
+      break;
     default:
       console.error(`Unknown command: ${command}`);
       printUsage();
@@ -51,6 +54,7 @@ Commands:
   afk [--max-slices N]          Run slices until completion or cap
   resume [--discard]            Resume an interrupted run
   status                        Show current state
+  install-skill                 Install /ember-prd skill for Claude Code
 
 Options:
   --allow-commits               Let the model create commits (default: Ember commits)
