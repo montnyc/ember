@@ -3,11 +3,11 @@ import type { EmberConfig, RunnerResult } from "./types";
 export async function spawnClaude(
   prompt: string,
   config: EmberConfig,
-  projectRoot: string
+  projectRoot: string,
+  sessionId?: string
 ): Promise<RunnerResult> {
-  // v1 runs fully unattended — permission prompts would block the loop.
-  // A future v2 could add runner modes (e.g. acceptEdits) via config.
-  //
+  // Session ID gives Claude persistent context across calls within a slice —
+  // without it, Claude often just produces text instead of using tools.
   const args = [
     "claude",
     "--dangerously-skip-permissions",
@@ -16,6 +16,7 @@ export async function spawnClaude(
     "--verbose",
     "--model",
     config.runner.model,
+    ...(sessionId ? ["--session-id", sessionId] : []),
     "-p",
     prompt,
   ];
@@ -45,7 +46,7 @@ export async function spawnClaude(
   };
 }
 
-// --- Stream processing ---
+// --- Stream processing with live terminal output ---
 
 interface CollectedOutput {
   output: string;
@@ -73,17 +74,21 @@ async function collectStreamEvents(
     buffer = lines.pop() ?? "";
 
     for (const line of lines) {
-      const result = parseStreamEvent(line);
-      if (!result) continue;
-      ({ output, costUsd, durationMs } = applyEvent(result, output, costUsd, durationMs));
+      const event = parseStreamEvent(line);
+      if (!event) continue;
+
+      // Show activity in terminal so the user knows what's happening
+      printStreamEvent(event);
+
+      ({ output, costUsd, durationMs } = applyEvent(event, output, costUsd, durationMs));
     }
   }
 
-  // Process any remaining data in the buffer
   if (buffer.trim()) {
-    const result = parseStreamEvent(buffer);
-    if (result) {
-      ({ output, costUsd, durationMs } = applyEvent(result, output, costUsd, durationMs));
+    const event = parseStreamEvent(buffer);
+    if (event) {
+      printStreamEvent(event);
+      ({ output, costUsd, durationMs } = applyEvent(event, output, costUsd, durationMs));
     }
   }
 
@@ -95,8 +100,6 @@ function parseStreamEvent(line: string): Record<string, unknown> | null {
   try {
     return JSON.parse(line);
   } catch {
-    // Expected: Claude streams non-JSON progress lines (e.g. "Thinking...")
-    // that we intentionally skip. Only structured events matter.
     return null;
   }
 }
@@ -124,3 +127,49 @@ function applyEvent(
 
   return { output, costUsd, durationMs };
 }
+
+// --- Live terminal output ---
+
+function printStreamEvent(event: Record<string, unknown>): void {
+  if (event.type === "assistant") {
+    const message = event.message as { content?: { type: string; name?: string; text?: string; input?: { description?: string; command?: string } }[] } | undefined;
+    if (!message?.content) return;
+
+    for (const block of message.content) {
+      if (block.type === "tool_use") {
+        const detail = block.input?.command
+          ?? block.input?.description?.slice(0, 100)
+          ?? "";
+        console.log(`  ${dim("┃")} ${yellow(block.name ?? "tool")} ${detail}`);
+      } else if (block.type === "text" && block.text) {
+        // Show first line of assistant text, truncated
+        const firstLine = block.text.split("\n")[0].slice(0, 120);
+        if (firstLine.trim()) {
+          console.log(`  ${dim("┃")} ${firstLine}`);
+        }
+      }
+    }
+  } else if (event.type === "user") {
+    const message = event.message as { content?: { type: string; is_error?: boolean }[] } | undefined;
+    if (!message?.content) return;
+
+    for (const block of message.content) {
+      if (block.type === "tool_result") {
+        const status = block.is_error ? red("✗") : green("✓");
+        console.log(`  ${dim("┃")} ${status}`);
+      }
+    }
+  } else if (event.type === "result") {
+    const cost = (event.cost_usd as number) ?? 0;
+    const duration = (event.duration_ms as number) ?? 0;
+    const costStr = cost > 0 ? ` $${cost.toFixed(4)}` : "";
+    const durationStr = duration > 0 ? ` ${(duration / 1000).toFixed(1)}s` : "";
+    console.log(`  ${dim("┃")} ${green("done")}${costStr}${durationStr}`);
+  }
+}
+
+// ANSI helpers
+function dim(s: string): string { return `\x1b[2m${s}\x1b[0m`; }
+function yellow(s: string): string { return `\x1b[33m${s}\x1b[0m`; }
+function green(s: string): string { return `\x1b[32m${s}\x1b[0m`; }
+function red(s: string): string { return `\x1b[31m${s}\x1b[0m`; }

@@ -25,12 +25,15 @@ export async function executeSlice(
   const prd = state.prds[slice.prdId];
   if (!prd) throw new Error(`PRD ${slice.prdId} not found for slice ${slice.id}`);
 
+  // Session ID gives Claude persistent context across all calls within this
+  // slice execution — it remembers files it read, tools it used, etc.
+  const sessionId = `ember-${slice.id}-${Date.now()}`;
   const memory = renderMemory(state);
 
-  const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot, allowCommits);
+  const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot, allowCommits, sessionId);
   if (workResult.exitCode !== 0) return "error";
 
-  const reviewResult = await runReviewPhase(state, slice, prd, config, logger, projectRoot);
+  const reviewResult = await runReviewPhase(state, slice, prd, config, logger, projectRoot, sessionId);
   if (reviewResult === null) {
     // No changes detected — count this as a failed iteration so the retry
     // cap still applies and we don't loop forever.
@@ -41,7 +44,7 @@ export async function executeSlice(
 
   const { checksPass, checksOutput } = await runChecksPhase(state, slice, config, logger, projectRoot);
 
-  const verdict = await runGatePhase(state, slice, prd, reviewResult.reviewOutput, checksPass, checksOutput, config, logger, projectRoot);
+  const verdict = await runGatePhase(state, slice, prd, reviewResult.reviewOutput, checksPass, checksOutput, config, logger, projectRoot, sessionId);
   if (!verdict) return "error";
 
   // Safety invariant: gate must not mark "done" when checks failed.
@@ -65,7 +68,8 @@ async function runWorkPhase(
   config: EmberConfig,
   logger: RunLogger,
   projectRoot: string,
-  allowCommits: boolean
+  allowCommits: boolean,
+  sessionId: string
 ): Promise<RunnerResult> {
   updateStep(state, "work");
   await writeState(projectRoot, state);
@@ -74,7 +78,7 @@ async function runWorkPhase(
   await logEvent(logger, "work-start", slice.id, {});
 
   const prompt = buildWorkPrompt(slice, prd, memory, config, allowCommits);
-  const result = await spawnClaude(prompt, config, projectRoot);
+  const result = await spawnClaude(prompt, config, projectRoot, sessionId);
 
   await logEvent(logger, "work-end", slice.id, {
     exitCode: result.exitCode,
@@ -99,7 +103,8 @@ async function runReviewPhase(
   prd: PrdState,
   config: EmberConfig,
   logger: RunLogger,
-  projectRoot: string
+  projectRoot: string,
+  sessionId: string
 ): Promise<ReviewResult | null> {
   updateStep(state, "review");
   await writeState(projectRoot, state);
@@ -118,7 +123,7 @@ async function runReviewPhase(
   await logEvent(logger, "review-start", slice.id, {});
 
   const prompt = buildReviewPrompt(slice, prd, diff);
-  const result = await spawnClaude(prompt, config, projectRoot);
+  const result = await spawnClaude(prompt, config, projectRoot, sessionId);
 
   await logEvent(logger, "review-end", slice.id, {});
 
@@ -161,7 +166,8 @@ async function runGatePhase(
   checksOutput: string,
   config: EmberConfig,
   logger: RunLogger,
-  projectRoot: string
+  projectRoot: string,
+  sessionId: string
 ): Promise<GateVerdict | null> {
   updateStep(state, "gate");
   await writeState(projectRoot, state);
@@ -170,7 +176,7 @@ async function runGatePhase(
   await logEvent(logger, "gate-start", slice.id, {});
 
   const prompt = buildGatePrompt(slice, prd, reviewOutput, checksOutput, checksPass);
-  const gateResult = await spawnClaude(prompt, config, projectRoot);
+  const gateResult = await spawnClaude(prompt, config, projectRoot, sessionId);
 
   let verdict: GateVerdict;
   try {

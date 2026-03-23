@@ -42,17 +42,18 @@ ${criteriaText}
 ${tracerInstructions}
 ## Rules
 
-1. Stay within the scope of this slice. Do not work on other criteria or PRDs.
-2. ${allowCommits ? `Create a git commit when done with prefix: [ember:${slice.id}]` : "Do NOT create git commits. Ember handles commits after verification passes."}
-3. Write clean, minimal code. No over-engineering.
-4. Only create or modify files directly required by the criteria above. Do not create scripts, CI configs, READMEs, or infrastructure files.
-5. If you encounter a blocker, stop and explain what is blocked and why.
+1. You MUST use tools to read and write files. Do not just describe what should be done — actually do it. Read existing files, then create or edit the files needed to satisfy the criteria.
+2. Stay within the scope of this slice. Do not work on other criteria or PRDs.
+3. ${allowCommits ? `Create a git commit when done with prefix: [ember:${slice.id}]` : "Do NOT create git commits. Ember handles commits after verification passes."}
+4. Write clean, minimal code. No over-engineering.
+5. Only create or modify files directly required by the criteria above. Do not create scripts, CI configs, READMEs, or infrastructure files.
+6. If you encounter a blocker, stop and explain what is blocked and why.
 
 ## PRD: ${prd.title}
 
 File: docs/prd/${prd.filename}
 
-Read the PRD file for full context.
+Read the PRD file and the relevant source files for full context before making changes.
 
 ## Current Project Memory
 
