@@ -35,6 +35,9 @@ async function main() {
     case "status":
       await cmdStatus();
       break;
+    case "reset":
+      await cmdReset(args.slice(1));
+      break;
     case "install-skill":
       await import("./install-skill");
       break;
@@ -49,10 +52,11 @@ function printUsage() {
   console.log(`Usage: ember <command>
 
 Commands:
-  init                          Initialize Ember in the current project
+  init                          Initialize and sync PRDs (re-run to unstick)
   run [--slice <id>]            Run one slice
   afk [--max-slices N]          Run slices until completion or cap
   resume [--discard]            Resume an interrupted run
+  reset [--slice <id>] [--all]  Reset failed/blocked slices back to pending
   status                        Show current state
   install-skill                 Install /ember-prd skill for Claude Code
 
@@ -79,17 +83,28 @@ async function cmdInit() {
   }
   const state = await syncState(projectRoot);
 
+  // Clear any stuck state from previous runs
+  const unstuck = unstickState(state);
+  if (unstuck > 0 || state.currentRun) {
+    state.currentRun = null;
+    await writeState(projectRoot, state);
+    console.log(`  Unstuck:  ${unstuck} slice(s) reset to pending`);
+  }
+
   const prdCount = Object.keys(state.prds).length;
   const criteriaCount = Object.values(state.prds).reduce(
     (sum, prd) => sum + Object.keys(prd.criteria).length,
     0
   );
   const sliceCount = Object.keys(state.slices).length;
+  const pendingSlices = Object.values(state.slices).filter(
+    (s) => s.status === "pending"
+  ).length;
 
   console.log(`Ember initialized in ${projectRoot}`);
   console.log(`  PRDs:     ${prdCount}`);
   console.log(`  Criteria: ${criteriaCount}`);
-  console.log(`  Slices:   ${sliceCount}`);
+  console.log(`  Slices:   ${sliceCount} (${pendingSlices} pending)`);
 }
 
 // --- run ---
@@ -111,8 +126,18 @@ async function cmdRun(args: string[]) {
     return;
   }
 
+  // If targeting a specific slice that's stuck, auto-reset it
+  if (sliceId && slice.status !== "pending" && slice.status !== "done") {
+    console.log(`Resetting ${slice.id} from ${slice.status} to pending.`);
+    slice.status = "pending";
+    slice.reviewIterations = 0;
+    slice.blockReason = null;
+    state.currentRun = null;
+    await writeState(projectRoot, state);
+  }
+
   if (slice.status !== "pending") {
-    console.log(`Slice ${slice.id} is ${slice.status}, not pending.`);
+    console.log(`Slice ${slice.id} is ${slice.status}.`);
     return;
   }
 
@@ -461,6 +486,72 @@ function printNextSlice(state: EmberState) {
   const next = selectNextSlice(state);
   if (!next) return;
   console.log(`\nNext: ${next.id} [${next.kind}] — ${next.title}`);
+}
+
+// --- reset ---
+
+async function cmdReset(args: string[]) {
+  const projectRoot = await findProjectRoot();
+  setGitRoot(projectRoot);
+  await ensureEmberDirs(projectRoot);
+  const state = await syncState(projectRoot);
+
+  const sliceId = parseArg(args, "--slice");
+  const all = hasFlag(args, "--all");
+
+  if (sliceId) {
+    const slice = state.slices[sliceId];
+    if (!slice) {
+      console.error(`Slice ${sliceId} not found.`);
+      process.exit(1);
+    }
+    if (slice.status === "done") {
+      console.log(`Slice ${sliceId} is already done.`);
+      return;
+    }
+    slice.status = "pending";
+    slice.reviewIterations = 0;
+    slice.blockReason = null;
+    console.log(`Reset ${sliceId} to pending.`);
+  } else if (all) {
+    const count = unstickState(state);
+    console.log(`Reset ${count} slice(s) to pending.`);
+  } else {
+    // Show what's stuck and ask
+    const stuck = Object.values(state.slices).filter(
+      (s) => s.status === "failed" || s.status === "blocked" || s.status === "running"
+    );
+    if (stuck.length === 0) {
+      console.log("No stuck slices.");
+      return;
+    }
+    console.log("Stuck slices:");
+    for (const s of stuck) {
+      console.log(`  ${s.id.padEnd(20)} ${s.status.padEnd(10)} ${s.title}`);
+    }
+    console.log(`\nUse --all to reset all, or --slice <id> to reset one.`);
+    return;
+  }
+
+  state.currentRun = null;
+  await writeState(projectRoot, state);
+}
+
+/**
+ * Reset failed/blocked/running slices back to pending.
+ * Returns the count of slices reset.
+ */
+function unstickState(state: EmberState): number {
+  let count = 0;
+  for (const slice of Object.values(state.slices)) {
+    if (slice.status === "failed" || slice.status === "blocked" || slice.status === "running") {
+      slice.status = "pending";
+      slice.reviewIterations = 0;
+      slice.blockReason = null;
+      count++;
+    }
+  }
+  return count;
 }
 
 // --- Utility ---
