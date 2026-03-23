@@ -58,7 +58,7 @@ describe("readState / writeState", () => {
 });
 
 describe("syncState", () => {
-  test("creates PRDs and tracer slices from disk", async () => {
+  test("creates PRDs and one slice per criterion from disk", async () => {
     await writePrd("001-auth.md", SAMPLE_PRD);
 
     const state = await syncState(testDir);
@@ -71,12 +71,11 @@ describe("syncState", () => {
       "AC-002",
     ]);
 
-    // Should have created a tracer slice
+    // Should have created one slice per criterion
     const sliceIds = Object.keys(state.slices);
-    expect(sliceIds).toHaveLength(1);
-    expect(sliceIds[0]).toBe("001:tracer-1");
-    expect(state.slices["001:tracer-1"].kind).toBe("tracer");
-    expect(state.slices["001:tracer-1"].criterionIds).toEqual(["AC-001"]);
+    expect(sliceIds).toHaveLength(2);
+    expect(state.slices["001:ac-001"].criterionIds).toEqual(["AC-001"]);
+    expect(state.slices["001:ac-002"].criterionIds).toEqual(["AC-002"]);
   });
 
   test("preserves completed criteria on re-sync", async () => {
@@ -107,15 +106,12 @@ describe("syncState", () => {
     expect(state.prds["001"].status).toBe("archived");
   });
 
-  test("does not create duplicate tracer slices on re-sync", async () => {
+  test("does not create duplicate slices on re-sync", async () => {
     await writePrd("001-auth.md", SAMPLE_PRD);
     await syncState(testDir);
     const state = await syncState(testDir);
 
-    const tracers = Object.values(state.slices).filter(
-      (s) => s.kind === "tracer"
-    );
-    expect(tracers).toHaveLength(1);
+    expect(Object.keys(state.slices)).toHaveLength(2);
   });
 
   test("picks up new PRDs on re-sync", async () => {
@@ -134,6 +130,7 @@ describe("syncState", () => {
 
     const state = await syncState(testDir);
     expect(Object.keys(state.prds)).toEqual(["001", "002"]);
-    expect(Object.keys(state.slices)).toHaveLength(2);
+    // 2 from PRD 001 + 1 from PRD 002
+    expect(Object.keys(state.slices)).toHaveLength(3);
   });
 });

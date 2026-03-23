@@ -1,7 +1,7 @@
 import path from "node:path";
 import { rename } from "node:fs/promises";
 import { parseAllPrds } from "./prd";
-import { createTracerSlice, prdNeedsTracer } from "./slices";
+import { createSlicesForPrd } from "./slices";
 import type { EmberState, ParsedPrd, PrdState, CriterionState } from "./types";
 
 const EMBER_DIR = ".ember";
@@ -74,6 +74,10 @@ export async function syncState(projectRoot: string): Promise<EmberState> {
 
     if (existingPrd) {
       updateExistingPrd(existingPrd, parsed);
+      // Create slices for any new criteria added to existing PRDs
+      for (const slice of createSlicesForPrd(existingPrd, state.slices)) {
+        state.slices[slice.id] = slice;
+      }
     } else {
       addNewPrd(state, parsed);
     }
@@ -114,9 +118,9 @@ function addNewPrd(state: EmberState, parsed: ParsedPrd): void {
 
   state.prds[parsed.id] = prd;
 
-  if (prdNeedsTracer(prd, state.slices)) {
-    const tracer = createTracerSlice(prd);
-    state.slices[tracer.id] = tracer;
+  // Create one slice per pending criterion
+  for (const slice of createSlicesForPrd(prd, state.slices)) {
+    state.slices[slice.id] = slice;
   }
 }
 

@@ -6,39 +6,42 @@ import type {
   SliceStatus,
 } from "./types";
 
-export function prdNeedsTracer(
+/**
+ * Create one slice per pending criterion in the PRD.
+ * This matches the proven afk pattern: one Claude call per criterion.
+ */
+export function createSlicesForPrd(
   prd: PrdState,
-  slices: Record<string, SliceState>
-): boolean {
-  if (prd.tracerValidated) return false;
-  if (Object.keys(prd.criteria).length === 0) return false;
+  existingSlices: Record<string, SliceState>
+): SliceState[] {
+  const newSlices: SliceState[] = [];
 
-  // Check if there's already a tracer slice for this PRD
-  for (const slice of Object.values(slices)) {
-    if (slice.prdId === prd.id && slice.kind === "tracer") {
-      return false;
-    }
+  for (const [criterionId, criterion] of Object.entries(prd.criteria)) {
+    if (criterion.status === "done") continue;
+
+    // Check if a slice already exists for this criterion
+    const existing = Object.values(existingSlices).find(
+      (s) => s.prdId === prd.id && s.criterionIds.includes(criterionId)
+    );
+    if (existing) continue;
+
+    newSlices.push({
+      id: `${prd.id}:${criterionId.toLowerCase()}`,
+      prdId: prd.id,
+      kind: "direct",
+      title: criterion.text,
+      status: "pending",
+      criterionIds: [criterionId],
+      dependsOn: [],
+      createdBy: "system",
+      createdAt: new Date().toISOString(),
+      completedAt: null,
+      reviewIterations: 0,
+      blockReason: null,
+    });
   }
-  return true;
-}
 
-export function createTracerSlice(prd: PrdState): SliceState {
-  const firstCriterion = Object.keys(prd.criteria)[0];
-
-  return {
-    id: `${prd.id}:tracer-1`,
-    prdId: prd.id,
-    kind: "tracer",
-    title: `Prove critical path for ${prd.title}`,
-    status: "pending",
-    criterionIds: firstCriterion ? [firstCriterion] : [],
-    dependsOn: [],
-    createdBy: "system",
-    createdAt: new Date().toISOString(),
-    completedAt: null,
-    reviewIterations: 0,
-    blockReason: null,
-  };
+  return newSlices;
 }
 
 export function createSliceFromProposal(
@@ -46,7 +49,6 @@ export function createSliceFromProposal(
   proposal: ProposedSlice,
   existingSlices: Record<string, SliceState>
 ): SliceState {
-  // Find next increment for this prd + kind
   let n = 1;
   const prefix = `${prdId}:${proposal.kind}-`;
   for (const id of Object.keys(existingSlices)) {

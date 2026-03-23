@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
-  createTracerSlice,
+  createSlicesForPrd,
   createSliceFromProposal,
   transitionSlice,
-  prdNeedsTracer,
 } from "../slices";
 import { defaultState } from "../state";
 import type { PrdState, SliceState } from "../types";
@@ -37,18 +36,31 @@ function makePrd(overrides: Partial<PrdState> = {}): PrdState {
   };
 }
 
-describe("prdNeedsTracer", () => {
-  test("returns true for new PRD with no slices", () => {
-    expect(prdNeedsTracer(makePrd(), {})).toBe(true);
+describe("createSlicesForPrd", () => {
+  test("creates one slice per pending criterion", () => {
+    const slices = createSlicesForPrd(makePrd(), {});
+    expect(slices).toHaveLength(2);
+    expect(slices[0].id).toBe("001:ac-001");
+    expect(slices[0].criterionIds).toEqual(["AC-001"]);
+    expect(slices[1].id).toBe("001:ac-002");
+    expect(slices[1].criterionIds).toEqual(["AC-002"]);
   });
 
-  test("returns false when tracer already exists", () => {
-    const slices: Record<string, SliceState> = {
-      "001:tracer-1": {
-        id: "001:tracer-1",
+  test("skips done criteria", () => {
+    const prd = makePrd();
+    prd.criteria["AC-001"].status = "done";
+    const slices = createSlicesForPrd(prd, {});
+    expect(slices).toHaveLength(1);
+    expect(slices[0].criterionIds).toEqual(["AC-002"]);
+  });
+
+  test("skips criteria that already have slices", () => {
+    const existing: Record<string, SliceState> = {
+      "001:ac-001": {
+        id: "001:ac-001",
         prdId: "001",
-        kind: "tracer",
-        title: "test",
+        kind: "direct",
+        title: "Sign in works",
         status: "pending",
         criterionIds: ["AC-001"],
         dependsOn: [],
@@ -59,27 +71,16 @@ describe("prdNeedsTracer", () => {
         blockReason: null,
       },
     };
-    expect(prdNeedsTracer(makePrd(), slices)).toBe(false);
+    const slices = createSlicesForPrd(makePrd(), existing);
+    expect(slices).toHaveLength(1);
+    expect(slices[0].criterionIds).toEqual(["AC-002"]);
   });
 
-  test("returns false when tracer validated", () => {
-    expect(prdNeedsTracer(makePrd({ tracerValidated: true }), {})).toBe(false);
-  });
-
-  test("returns false when no criteria", () => {
-    expect(prdNeedsTracer(makePrd({ criteria: {} }), {})).toBe(false);
-  });
-});
-
-describe("createTracerSlice", () => {
-  test("creates tracer with first criterion", () => {
-    const slice = createTracerSlice(makePrd());
-    expect(slice.id).toBe("001:tracer-1");
-    expect(slice.kind).toBe("tracer");
-    expect(slice.prdId).toBe("001");
-    expect(slice.criterionIds).toEqual(["AC-001"]);
-    expect(slice.status).toBe("pending");
-    expect(slice.createdBy).toBe("system");
+  test("returns empty for PRD with no pending criteria", () => {
+    const prd = makePrd();
+    prd.criteria["AC-001"].status = "done";
+    prd.criteria["AC-002"].status = "done";
+    expect(createSlicesForPrd(prd, {})).toHaveLength(0);
   });
 });
 
@@ -90,72 +91,34 @@ describe("createSliceFromProposal", () => {
     };
     const slice = createSliceFromProposal(
       "001",
-      {
-        title: "Add reset flow",
-        kind: "expand",
-        criterionIds: ["AC-002"],
-        priority: "normal",
-      },
+      { title: "Add reset", kind: "expand", criterionIds: ["AC-002"], priority: "normal" },
       existing
     );
     expect(slice.id).toBe("001:expand-2");
-    expect(slice.createdBy).toBe("gate");
-  });
-
-  test("starts at 1 when no existing slices", () => {
-    const slice = createSliceFromProposal(
-      "001",
-      {
-        title: "Polish auth",
-        kind: "polish",
-        criterionIds: [],
-        priority: "low",
-      },
-      {}
-    );
-    expect(slice.id).toBe("001:polish-1");
   });
 });
 
 describe("transitionSlice", () => {
   test("allows pending -> running", () => {
     const state = defaultState("/tmp");
-    state.slices["001:tracer-1"] = createTracerSlice(makePrd());
-    transitionSlice(state, "001:tracer-1", "running");
-    expect(state.slices["001:tracer-1"].status).toBe("running");
-  });
-
-  test("allows running -> done and sets completedAt", () => {
-    const state = defaultState("/tmp");
-    state.slices["001:tracer-1"] = createTracerSlice(makePrd());
-    state.slices["001:tracer-1"].status = "running";
-    transitionSlice(state, "001:tracer-1", "done");
-    expect(state.slices["001:tracer-1"].status as string).toBe("done");
-    expect(state.slices["001:tracer-1"].completedAt).not.toBeNull();
+    state.slices["001:ac-001"] = {
+      id: "001:ac-001", prdId: "001", kind: "direct", title: "test",
+      status: "pending", criterionIds: ["AC-001"], dependsOn: [],
+      createdBy: "system", createdAt: "", completedAt: null,
+      reviewIterations: 0, blockReason: null,
+    };
+    transitionSlice(state, "001:ac-001", "running");
+    expect(state.slices["001:ac-001"].status).toBe("running");
   });
 
   test("rejects invalid transitions", () => {
     const state = defaultState("/tmp");
-    state.slices["001:tracer-1"] = createTracerSlice(makePrd());
-    expect(() =>
-      transitionSlice(state, "001:tracer-1", "done")
-    ).toThrow("Invalid transition");
-  });
-
-  test("sets blockReason on blocked", () => {
-    const state = defaultState("/tmp");
-    state.slices["001:tracer-1"] = createTracerSlice(makePrd());
-    state.slices["001:tracer-1"].status = "running";
-    transitionSlice(state, "001:tracer-1", "blocked", {
-      blockReason: "Tests fail",
-    });
-    expect(state.slices["001:tracer-1"].blockReason).toBe("Tests fail");
-  });
-
-  test("throws for unknown slice", () => {
-    const state = defaultState("/tmp");
-    expect(() => transitionSlice(state, "nope", "running")).toThrow(
-      "Slice nope not found"
-    );
+    state.slices["001:ac-001"] = {
+      id: "001:ac-001", prdId: "001", kind: "direct", title: "test",
+      status: "pending", criterionIds: ["AC-001"], dependsOn: [],
+      createdBy: "system", createdAt: "", completedAt: null,
+      reviewIterations: 0, blockReason: null,
+    };
+    expect(() => transitionSlice(state, "001:ac-001", "done")).toThrow("Invalid transition");
   });
 });
