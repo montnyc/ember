@@ -7,7 +7,7 @@ import { selectNextSlice } from "./select";
 import { transitionSlice } from "./slices";
 import { executeSlice } from "./loop";
 import { createRunLog } from "./log";
-import { assertCleanWorkingTree, resetWorkingTree, hasUncommittedChanges, setGitRoot } from "./git";
+import { resetWorkingTree, hasUncommittedChanges, setGitRoot } from "./git";
 import type { EmberConfig, EmberState, SliceState } from "./types";
 
 async function main() {
@@ -61,6 +61,7 @@ Commands:
   install-skill                 Install /ember-prd skill for Claude Code
 
 Options:
+  --clean                       Discard uncommitted changes before running
   --allow-commits               Let the model create commits (default: Ember commits)
   --discard                     Discard uncommitted changes when resuming`);
 }
@@ -113,7 +114,7 @@ async function cmdRun(args: string[]) {
   const projectRoot = await findProjectRoot();
   setGitRoot(projectRoot);
   await ensureEmberDirs(projectRoot);
-  await assertCleanWorkingTree();
+  await ensureCleanTree(args);
   const state = await syncState(projectRoot);
   const config = await loadConfig(projectRoot);
   const allowCommits = hasFlag(args, "--allow-commits");
@@ -150,7 +151,7 @@ async function cmdAfk(args: string[]) {
   const projectRoot = await findProjectRoot();
   setGitRoot(projectRoot);
   await ensureEmberDirs(projectRoot);
-  await assertCleanWorkingTree();
+  await ensureCleanTree(args);
   const config = await loadConfig(projectRoot);
   const allowCommits = hasFlag(args, "--allow-commits");
 
@@ -535,6 +536,27 @@ async function cmdReset(args: string[]) {
 
   state.currentRun = null;
   await writeState(projectRoot, state);
+}
+
+/**
+ * Ensure tree is clean before running. With --clean, discard changes
+ * automatically. Without it, tell the user what to do.
+ */
+async function ensureCleanTree(args: string[]): Promise<void> {
+  if (!(await hasUncommittedChanges())) return;
+
+  if (hasFlag(args, "--clean")) {
+    console.log("Discarding uncommitted changes (--clean)...");
+    await resetWorkingTree();
+    return;
+  }
+
+  console.error(
+    "Working tree is not clean.\n" +
+    "  Run with --clean to discard uncommitted changes, or\n" +
+    "  commit/stash them manually first."
+  );
+  process.exit(1);
 }
 
 /**
