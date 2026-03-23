@@ -1,0 +1,32 @@
+{
+  "name": "@montnyc/ember",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "PRD-driven autonomous coding loop tool",
+  "bin": {
+    "ember": "./src/cli.ts"
+  },
+  "files": [
+    "src/**/*.ts",
+    "!src/__tests__/**"
+  ],
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "bunx tsc --noEmit",
+    "lint": "bunx oxlint src/",
+    "fmt": "bunx oxfmt .",
+    "fmt:check": "bunx oxfmt --check ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/montnyc/ember.git"
+  },
+  "keywords": ["cli", "autonomous", "coding", "prd", "ai", "claude"],
+  "author": "montnyc",
+  "license": "MIT",
+  "devDependencies": {
+    "oxlint": "latest",
+    "typescript": "^5.8.0",
+    "@types/bun": "latest"
+  }
+}
