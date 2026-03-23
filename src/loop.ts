@@ -27,7 +27,7 @@ export async function executeSlice(
 
   // Session ID gives Claude persistent context across all calls within this
   // slice execution — it remembers files it read, tools it used, etc.
-  const sessionId = `ember-${slice.id}-${Date.now()}`;
+  const sessionId = crypto.randomUUID();
   const memory = renderMemory(state);
 
   const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot, allowCommits, sessionId);
