@@ -4,13 +4,14 @@
   "type": "module",
   "description": "PRD-driven autonomous coding loop tool",
   "bin": {
-    "ember": "./src/cli.ts"
+    "ember": "./dist/cli.js"
   },
   "files": [
-    "src/**/*.ts",
-    "!src/__tests__/**"
+    "dist/cli.js"
   ],
   "scripts": {
+    "build": "bun build src/cli.ts --target=bun --outfile=dist/cli.js",
+    "prepublishOnly": "bun run build",
     "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx oxlint src/",
@@ -25,8 +26,8 @@
   "author": "montnyc",
   "license": "MIT",
   "devDependencies": {
+    "@types/bun": "latest",
     "oxlint": "latest",
-    "typescript": "^5.8.0",
-    "@types/bun": "latest"
+    "typescript": "^5.8.0"
   }
 }
