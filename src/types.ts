@@ -1,7 +1,5 @@
 // --- Config ---
 
-export type CommitPolicy = "ember" | "model";
-
 export interface EmberConfig {
   runner: {
     type: "claude";
@@ -14,7 +12,6 @@ export interface EmberConfig {
   checks: {
     default: string[];
   };
-  commitPolicy: CommitPolicy;
 }
 
 // --- PRD Parsing ---

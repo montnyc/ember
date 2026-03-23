@@ -19,14 +19,15 @@ export async function executeSlice(
   slice: SliceState,
   config: EmberConfig,
   logger: RunLogger,
-  projectRoot: string
+  projectRoot: string,
+  allowCommits = false
 ): Promise<SliceOutcome> {
   const prd = state.prds[slice.prdId];
   if (!prd) throw new Error(`PRD ${slice.prdId} not found for slice ${slice.id}`);
 
   const memory = renderMemory(state);
 
-  const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot);
+  const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot, allowCommits);
   if (workResult.exitCode !== 0) return "error";
 
   const reviewResult = await runReviewPhase(state, slice, prd, config, logger, projectRoot);
@@ -63,7 +64,8 @@ async function runWorkPhase(
   memory: string,
   config: EmberConfig,
   logger: RunLogger,
-  projectRoot: string
+  projectRoot: string,
+  allowCommits: boolean
 ): Promise<RunnerResult> {
   updateStep(state, "work");
   await writeState(projectRoot, state);
@@ -71,7 +73,7 @@ async function runWorkPhase(
   console.log(`\n[work] Starting work on ${slice.id}...`);
   await logEvent(logger, "work-start", slice.id, {});
 
-  const prompt = buildWorkPrompt(slice, prd, memory, config);
+  const prompt = buildWorkPrompt(slice, prd, memory, config, allowCommits);
   const result = await spawnClaude(prompt, config, projectRoot);
 
   await logEvent(logger, "work-end", slice.id, {

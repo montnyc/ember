@@ -72,8 +72,7 @@ Controls whether the work prompt tells Claude to commit or not:
 {
   "runner": { "type": "claude", "model": "sonnet" },
   "loop": { "maxReviewIterations": 3, "maxAfkSlices": 10 },
-  "checks": { "default": ["bun test", "bunx tsc --noEmit"] },
-  "commitPolicy": "ember"
+  "checks": { "default": ["bun test", "bunx tsc --noEmit"] }
 }
 ```
 

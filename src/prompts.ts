@@ -1,10 +1,11 @@
-import type { CommitPolicy, EmberConfig, PrdState, SliceState } from "./types";
+import type { EmberConfig, PrdState, SliceState } from "./types";
 
 export function buildWorkPrompt(
   slice: SliceState,
   prd: PrdState,
   memory: string,
-  config: EmberConfig
+  config: EmberConfig,
+  allowCommits = false
 ): string {
   const criteriaText = slice.criterionIds
     .map((criterionId) => {
@@ -42,7 +43,7 @@ ${tracerInstructions}
 ## Rules
 
 1. Stay within the scope of this slice. Do not work on other criteria or PRDs.
-2. ${commitRuleForPolicy(config.commitPolicy, slice.id)}
+2. ${allowCommits ? `Create a git commit when done with prefix: [ember:${slice.id}]` : "Do NOT create git commits. Ember handles commits after verification passes."}
 3. Write clean, minimal code. No over-engineering.
 4. Only create or modify files directly required by the criteria above. Do not create scripts, CI configs, READMEs, or infrastructure files.
 5. If you encounter a blocker, stop and explain what is blocked and why.
@@ -147,11 +148,4 @@ Rules:
 - criteriaCompleted: Only list criteria that are fully satisfied by the current changes.
 - nextSlices: Suggest follow-up work if verdict is "done".
 `;
-}
-
-function commitRuleForPolicy(policy: CommitPolicy, sliceId: string): string {
-  if (policy === "model") {
-    return `Create a git commit when done with prefix: [ember:${sliceId}]`;
-  }
-  return "Do NOT create git commits. Ember handles commits after verification passes.";
 }

@@ -97,10 +97,7 @@ async function cmdRun(args: string[]) {
   await assertCleanWorkingTree();
   const state = await syncState(projectRoot);
   const config = await loadConfig(projectRoot);
-
-  if (hasFlag(args, "--allow-commits")) {
-    config.commitPolicy = "model";
-  }
+  const allowCommits = hasFlag(args, "--allow-commits");
 
   const sliceId = parseArg(args, "--slice");
   const slice = sliceId ? state.slices[sliceId] : selectNextSlice(state);
@@ -115,7 +112,7 @@ async function cmdRun(args: string[]) {
     return;
   }
 
-  await runSliceWithRetries(projectRoot, state, slice, config, "run");
+  await runSliceWithRetries(projectRoot, state, slice, config, "run", undefined, allowCommits);
 }
 
 // --- afk ---
@@ -126,10 +123,7 @@ async function cmdAfk(args: string[]) {
   await ensureEmberDirs(projectRoot);
   await assertCleanWorkingTree();
   const config = await loadConfig(projectRoot);
-
-  if (hasFlag(args, "--allow-commits")) {
-    config.commitPolicy = "model";
-  }
+  const allowCommits = hasFlag(args, "--allow-commits");
 
   const maxSlicesArg = parseArg(args, "--max-slices");
   const maxSlices = maxSlicesArg ? parseInt(maxSlicesArg, 10) : config.loop.maxAfkSlices;
@@ -158,7 +152,7 @@ async function cmdAfk(args: string[]) {
       console.log(`  ${slice.title}`);
 
       const outcome = await runSliceWithRetries(
-        projectRoot, state, slice, config, "afk", interrupt
+        projectRoot, state, slice, config, "afk", interrupt, allowCommits
       );
 
       if (interrupt.forceKill) break;
@@ -285,7 +279,8 @@ async function runSliceWithRetries(
   slice: SliceState,
   config: EmberConfig,
   mode: "run" | "afk",
-  interrupt?: InterruptState
+  interrupt?: InterruptState,
+  allowCommits = false
 ): Promise<string> {
   const runId = generateRunId();
   const logger = createRunLog(projectRoot, runId);
@@ -307,7 +302,7 @@ async function runSliceWithRetries(
     console.log(`Slice: ${slice.id} [${slice.kind}] — ${slice.title}`);
   }
 
-  let outcome = await executeSlice(state, slice, config, logger, projectRoot);
+  let outcome = await executeSlice(state, slice, config, logger, projectRoot, allowCommits);
 
   while (
     outcome === "iterate" &&
@@ -320,7 +315,7 @@ async function runSliceWithRetries(
     );
     state.currentRun.reviewIteration = slice.reviewIterations;
     await writeState(projectRoot, state);
-    outcome = await executeSlice(state, slice, config, logger, projectRoot);
+    outcome = await executeSlice(state, slice, config, logger, projectRoot, allowCommits);
   }
 
   if (outcome === "iterate") {

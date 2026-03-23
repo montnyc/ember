@@ -13,9 +13,6 @@ export const DEFAULT_CONFIG: EmberConfig = {
   checks: {
     default: ["bun test", "bunx tsc --noEmit"],
   },
-  // "ember": prompt says "don't commit", Ember commits after gate passes
-  // "model": prompt says "create a commit"
-  commitPolicy: "ember",
 };
 
 export async function loadConfig(
@@ -45,7 +42,6 @@ function mergeConfig(
     runner: { ...defaults.runner, ...overrides.runner },
     loop: { ...defaults.loop, ...overrides.loop },
     checks: { ...defaults.checks, ...overrides.checks },
-    commitPolicy: overrides.commitPolicy ?? defaults.commitPolicy,
   };
 }
 

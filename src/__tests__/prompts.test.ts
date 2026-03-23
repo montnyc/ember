@@ -62,14 +62,13 @@ describe("buildWorkPrompt", () => {
     expect(prompt).not.toContain("TRACER");
   });
 
-  test("instructs model not to commit with ember policy", () => {
+  test("instructs model not to commit by default", () => {
     const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
     expect(prompt).toContain("Do NOT create git commits");
   });
 
-  test("instructs model to commit with model policy", () => {
-    const modelConfig = { ...DEFAULT_CONFIG, commitPolicy: "model" as const };
-    const prompt = buildWorkPrompt(slice, prd, "", modelConfig);
+  test("instructs model to commit with allowCommits", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG, true);
     expect(prompt).toContain("Create a git commit");
     expect(prompt).toContain("[ember:001:tracer-1]");
   });
