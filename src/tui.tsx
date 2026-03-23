@@ -152,13 +152,16 @@ function Footer() {
   );
 }
 
-function App({ initialState }: { initialState: RunState }) {
+function App({ initialState, onExit }: { initialState: RunState; onExit: () => void }) {
   const [state, setState] = useState(initialState);
   const { width, height } = useTerminalDimensions();
 
   useKeyboard((key) => {
     if (key.name === "q" || key.name === "escape") {
-      process.exit(0);
+      onExit();
+    }
+    if (key.ctrl && key.name === "c") {
+      onExit();
     }
   });
 
@@ -188,9 +191,21 @@ function App({ initialState }: { initialState: RunState }) {
 
 // --- Demo ---
 
+function cleanExit(renderer: Awaited<ReturnType<typeof createCliRenderer>>) {
+  renderer.destroy();
+  // Force-reset terminal state in case OpenTUI misses anything
+  process.stdout.write("\x1b[?1049l"); // exit alternate screen
+  process.stdout.write("\x1b[?25h");   // show cursor
+  process.stdout.write("\x1b[?1000l"); // disable mouse tracking
+  process.stdout.write("\x1b[?1003l"); // disable all mouse tracking
+  process.stdout.write("\x1b[?2004l"); // disable bracketed paste
+  process.stdout.write("\x1b[0m");     // reset colors
+  process.exit(0);
+}
+
 async function demo() {
   const renderer = await createCliRenderer({
-    exitOnCtrlC: true,
+    exitOnCtrlC: false,
     useAlternateScreen: true,
   });
 
@@ -228,7 +243,11 @@ async function demo() {
     startTimeMs: Date.now() - 180_000,
   };
 
-  createRoot(renderer).render(<App initialState={mockState} />);
+  const exit = () => cleanExit(renderer);
+  process.on("SIGINT", exit);
+  process.on("SIGTERM", exit);
+
+  createRoot(renderer).render(<App initialState={mockState} onExit={exit} />);
 }
 
 demo();
