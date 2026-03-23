@@ -195,7 +195,7 @@ function EventRow({ event }: { event: ToolEvent }) {
 
 // --- Diff Tab ---
 
-function DiffTab({ diff, scrollOffset, maxVisible }: { diff: string; scrollOffset: number; maxVisible: number }) {
+function DiffTab({ diff }: { diff: string }) {
   if (!diff.trim()) {
     return (
       <box paddingX={1}>
@@ -204,24 +204,21 @@ function DiffTab({ diff, scrollOffset, maxVisible }: { diff: string; scrollOffse
     );
   }
 
-  const lines = diff.split("\n");
-  const visible = lines.slice(scrollOffset, scrollOffset + maxVisible);
-
   return (
-    <box flexDirection="column" paddingX={1}>
-      {scrollOffset > 0 && <text fg="#555">↑ {scrollOffset} lines above</text>}
-      {visible.map((line, i) => {
-        const color = line.startsWith("+") ? "#22c55e"
-          : line.startsWith("-") ? "#ef4444"
-          : line.startsWith("@@") ? "#3b82f6"
-          : line.startsWith("diff") || line.startsWith("index") ? "#eab308"
-          : "#666";
-        return <text key={i} fg={color}>{line.slice(0, 120)}</text>;
-      })}
-      {lines.length > scrollOffset + maxVisible && (
-        <text fg="#555">↓ {lines.length - scrollOffset - maxVisible} lines below</text>
-      )}
-    </box>
+    <scrollbox focused flexGrow={1}>
+      <diff
+        diff={diff}
+        view="unified"
+        filetype="typescript"
+        showLineNumbers
+        addedBg="#0d2818"
+        removedBg="#2d0f0f"
+        addedSignColor="#22c55e"
+        removedSignColor="#ef4444"
+        lineNumberFg="#555"
+        fg="#d4d4d4"
+      />
+    </scrollbox>
   );
 }
 
@@ -363,7 +360,7 @@ function App({ initialState, onExit, onPause, onSkip }: {
 
           <box flexGrow={1} flexDirection="column">
             {tab === "activity" && <ActivityTab events={state.events} maxVisible={maxRightPanelLines} />}
-            {tab === "diff" && <DiffTab diff={state.diff} scrollOffset={diffScroll} maxVisible={maxRightPanelLines} />}
+            {tab === "diff" && <DiffTab diff={state.diff} />}
             {tab === "code" && <CodeTab events={state.events} />}
           </box>
         </box>
@@ -394,15 +391,16 @@ export async function startTui(initialState: TuiState): Promise<TuiUpdater> {
   process.on("SIGINT", exit);
   process.on("SIGTERM", exit);
 
-  let pauseCallback: (() => void) | null = null;
-  let skipCallback: (() => void) | null = null;
+  // Placeholder callbacks — will be wired when integrating with real loop
+  const onPause = () => {};
+  const onSkip = () => {};
 
   createRoot(renderer).render(
     <App
       initialState={initialState}
       onExit={exit}
-      onPause={() => pauseCallback?.()}
-      onSkip={() => skipCallback?.()}
+      onPause={onPause}
+      onSkip={onSkip}
     />
   );
 
