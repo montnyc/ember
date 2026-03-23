@@ -2,7 +2,7 @@ import { spawnClaude } from "./runner";
 import { buildWorkPrompt, buildReviewPrompt, buildGatePrompt } from "./prompts";
 import { runChecks } from "./checks";
 import { parseGateVerdict } from "./gate";
-import { getHead, getFullDiff, getDiff, commitAll, softResetTo } from "./git";
+import { getFullDiff, commitAll } from "./git";
 import { writeMemory, renderMemory } from "./memory";
 import { transitionSlice, createSliceFromProposal } from "./slices";
 import { writeState } from "./state";
@@ -24,19 +24,12 @@ export async function executeSlice(
   const prd = state.prds[slice.prdId];
   if (!prd) throw new Error(`PRD ${slice.prdId} not found for slice ${slice.id}`);
 
-  const headBefore = await getHead();
   const memory = renderMemory(state);
 
   const workResult = await runWorkPhase(state, slice, prd, memory, config, logger, projectRoot);
   if (workResult.exitCode !== 0) return "error";
 
-  // Enforce commit policy: if "ember" owns commits and the model committed
-  // anyway, undo the commits but keep the file changes for review.
-  if (config.commitPolicy === "ember") {
-    await softResetTo(headBefore);
-  }
-
-  const reviewResult = await runReviewPhase(state, slice, prd, headBefore, config, logger, projectRoot);
+  const reviewResult = await runReviewPhase(state, slice, prd, config, logger, projectRoot);
   if (reviewResult === null) {
     // No changes detected — count this as a failed iteration so the retry
     // cap still applies and we don't loop forever.
@@ -57,7 +50,7 @@ export async function executeSlice(
     verdict.verdict = "iterate";
   }
 
-  return applyVerdict(state, slice, prd, verdict, projectRoot, workResult, config, logger);
+  return applyVerdict(state, slice, prd, verdict, projectRoot, workResult, logger);
 }
 
 // --- Phase runners ---
@@ -102,7 +95,6 @@ async function runReviewPhase(
   state: EmberState,
   slice: SliceState,
   prd: PrdState,
-  headBefore: string,
   config: EmberConfig,
   logger: RunLogger,
   projectRoot: string
@@ -112,13 +104,9 @@ async function runReviewPhase(
 
   console.log(`[review] Reviewing changes...`);
 
-  // "ember" policy: model was told not to commit (and we soft-reset if it did),
-  //   so all changes are uncommitted — use git diff HEAD.
-  // "model" policy: model was told to commit, so changes are in commits
-  //   since headBefore — use git diff headBefore..HEAD.
-  const diff = config.commitPolicy === "model"
-    ? await getDiff(headBefore)
-    : await getFullDiff();
+  // getFullDiff stages untracked files with intent-to-add then diffs against
+  // HEAD, so it catches everything: new files, edits, and model commits.
+  const diff = await getFullDiff();
 
   if (!diff.trim()) {
     console.log(`[review] No changes detected. Treating as iterate.`);
@@ -209,11 +197,10 @@ async function applyVerdict(
   verdict: GateVerdict,
   projectRoot: string,
   workResult: RunnerResult,
-  config: EmberConfig,
   _logger: RunLogger
 ): Promise<SliceOutcome> {
   if (verdict.verdict === "done") {
-    return applyDoneVerdict(state, slice, prd, verdict, projectRoot, workResult, config);
+    return applyDoneVerdict(state, slice, prd, verdict, projectRoot, workResult);
   }
 
   if (verdict.verdict === "iterate") {
@@ -235,8 +222,7 @@ async function applyDoneVerdict(
   prd: PrdState,
   verdict: GateVerdict,
   projectRoot: string,
-  workResult: RunnerResult,
-  config: EmberConfig
+  workResult: RunnerResult
 ): Promise<"done"> {
   transitionSlice(state, slice.id, "done");
 
@@ -247,11 +233,9 @@ async function applyDoneVerdict(
 
   await writeMemory(projectRoot, state);
 
-  // "ember" policy: Ember creates the commit after verification.
-  // "model" policy: model already committed during work — skip.
-  if (config.commitPolicy === "ember") {
-    await commitAll(`[ember:${slice.id}] ${verdict.summary}`);
-  }
+  // Commit any uncommitted changes (code + EMBER.md). If the model already
+  // committed during work, this is a no-op since there's nothing left to stage.
+  await commitAll(`[ember:${slice.id}] ${verdict.summary}`);
 
   state.history.push({
     runId: state.currentRun?.runId ?? "unknown",

@@ -59,9 +59,10 @@ ember afk --max-slices 5
 
 ## Commit Policy
 
-By default, Ember owns all git commits (`commitPolicy: "ember"`). The model is told not to commit, and Ember auto-commits after a successful gate.
+Controls whether the work prompt tells Claude to commit or not:
 
-Use `--allow-commits` to let the model commit during work instead.
+- **`"ember"`** (default) — prompt says "do not commit". Ember commits after the gate passes.
+- **`"model"`** (`--allow-commits`) — prompt says "create a commit". Useful if you want commit-per-step history.
 
 ## Config
 

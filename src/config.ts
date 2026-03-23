@@ -13,11 +13,8 @@ export const DEFAULT_CONFIG: EmberConfig = {
   checks: {
     default: ["bun test", "bunx tsc --noEmit"],
   },
-  // "ember": Ember owns all commits. The model is told not to commit, and
-  //          Ember enforces this by resetting any model-created commits.
-  //          Ember auto-commits after a successful gate.
-  // "model": The model creates commits during the work phase. Ember skips
-  //          auto-commit. Review diffs committed changes (HEAD..HEAD).
+  // "ember": prompt says "don't commit", Ember commits after gate passes
+  // "model": prompt says "create a commit"
   commitPolicy: "ember",
 };
 

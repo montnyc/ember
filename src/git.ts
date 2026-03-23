@@ -14,24 +14,11 @@ export async function getHead(): Promise<string> {
   return result.text().trim();
 }
 
-export async function hasNewCommits(since: string): Promise<boolean> {
-  const current = await getHead();
-  return current !== since;
-}
-
-export async function getDiff(since: string): Promise<string> {
-  const result = await Bun.$`git -C ${_projectRoot} diff ${since}..HEAD`.quiet();
-  return result.text();
-}
-
 /**
- * Get all changes relative to HEAD — both committed (by the model) and
- * uncommitted (staged + unstaged + untracked). This is the correct diff
- * surface for review when Ember owns commits.
+ * Get all changes relative to HEAD — committed, uncommitted, and untracked.
+ * Stages untracked files with intent-to-add first so new files show up.
  */
 export async function getFullDiff(): Promise<string> {
-  // Mark untracked files as "intent to add" so they appear in the diff.
-  // Without this, new files created by the model would be invisible.
   await Bun.$`git -C ${_projectRoot} add -N .`.quiet();
   const result = await Bun.$`git -C ${_projectRoot} diff HEAD`.quiet();
   return result.text();
@@ -64,23 +51,8 @@ export async function assertCleanWorkingTree(): Promise<void> {
 }
 
 /**
- * Soft-reset any commits the model created back to the given ref, keeping the
- * file changes as uncommitted edits. This enforces the "ember" commit policy:
- * the model may have ignored the "do not commit" instruction, so we undo the
- * commits while preserving the actual code changes for review.
- */
-export async function softResetTo(ref: string): Promise<void> {
-  const current = await getHead();
-  if (current !== ref) {
-    console.log(`[git] Resetting model-created commits back to ${ref.slice(0, 8)}`);
-    await Bun.$`git -C ${_projectRoot} reset --soft ${ref}`.quiet();
-  }
-}
-
-/**
  * Discard all uncommitted changes (staged, unstaged, and untracked files).
- * Used after a failed slice to restore a clean tree before the next iteration,
- * so partial edits from a failed slice don't leak into subsequent slices.
+ * Used after a failed slice to restore a clean tree before the next iteration.
  */
 export async function resetWorkingTree(): Promise<void> {
   await Bun.$`git -C ${_projectRoot} checkout HEAD -- .`.quiet();
