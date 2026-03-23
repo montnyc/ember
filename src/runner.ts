@@ -128,9 +128,13 @@ function applyEvent(
   return { output, costUsd, durationMs };
 }
 
-// --- Live terminal output ---
+// --- Live output ---
+// If a TUI override is set, events go there. Otherwise, print to terminal.
 
 function printStreamEvent(event: Record<string, unknown>): void {
+  const override = (globalThis as any).__emberPrintEvent;
+  if (override) { override(event); return; }
+
   if (event.type === "assistant") {
     const message = event.message as { content?: { type: string; name?: string; text?: string; input?: { description?: string; command?: string } }[] } | undefined;
     if (!message?.content) return;

@@ -18,8 +18,11 @@ async function main() {
   const command = args[0];
 
   if (!command) {
-    printUsage();
-    process.exit(1);
+    // No args → launch TUI
+    const { launchTui } = await import("./tui/index");
+    const projectRoot = await findProjectRoot();
+    await launchTui(projectRoot);
+    return;
   }
 
   switch (command) {
