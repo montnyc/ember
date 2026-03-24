@@ -205,7 +205,7 @@ async function runWithTui(projectRoot: string) {
       updateState((s) => ({ ...s, diff }));
     }
 
-    if (outcome === "done") {
+    if (outcome.status === "done") {
       completed++;
       totalCost += freshState.history[freshState.history.length - 1]?.costUsd ?? 0;
       updateState((s) => {
@@ -219,7 +219,7 @@ async function runWithTui(projectRoot: string) {
           events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} done ✓`, timestamp: Date.now() }],
         };
       });
-    } else if (outcome === "no_changes") {
+    } else if (outcome.status === "no_changes") {
       slice.reviewIterations = (slice.reviewIterations ?? 0) + 1;
 
       if (slice.reviewIterations >= NO_CHANGES_THRESHOLD) {

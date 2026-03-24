@@ -4,8 +4,9 @@ import path from "node:path";
 import { syncState, writeState } from "./state";
 import { loadConfig, writeDefaultConfig } from "./config";
 import { selectNextSlice } from "./select";
-import { transitionSlice } from "./slices";
+import { transitionSlice, createFixSlice } from "./slices";
 import { executeSlice } from "./loop";
+import type { SliceResult } from "./loop";
 import { createRunLog } from "./log";
 import { resetWorkingTree, hasUncommittedChanges, setGitRoot } from "./git";
 import type { EmberConfig, EmberState, SliceState } from "./types";
@@ -161,11 +162,22 @@ async function cmdAfk(args: string[]) {
   const startTimeMs = Date.now();
   let completed = 0;
   let totalCostUsd = 0;
+  let consecutiveErrors = 0;
+  let pendingCheckFailure: string | null = null; // check output from previous slice to feed into fix
+
+  const CIRCUIT_BREAKER_THRESHOLD = 5;
+  const MAX_FIX_ATTEMPTS = 3;
 
   console.log(`\nEmber AFK mode — max ${maxSlices} slices`);
 
   try {
     while (completed < maxSlices && !interrupt.stopping) {
+      // Circuit breaker: stop after too many consecutive errors
+      if (consecutiveErrors >= CIRCUIT_BREAKER_THRESHOLD) {
+        console.log(`\n⚠ Circuit breaker: ${consecutiveErrors} consecutive errors. Stopping.`);
+        break;
+      }
+
       const state = await syncState(projectRoot);
       const slice = selectNextSlice(state);
 
@@ -178,19 +190,35 @@ async function cmdAfk(args: string[]) {
         `\n${"=".repeat(50)}\n  Slice ${completed + 1}/${maxSlices}: ${slice.id} [${slice.kind}]\n  ${slice.title}\n${"=".repeat(50)}`
       );
 
-      const outcome = await runOneSlice(projectRoot, state, slice, config);
+      const sliceResult = await runOneSlice(projectRoot, state, slice, config, pendingCheckFailure);
+      pendingCheckFailure = null; // consumed
 
       if (interrupt.forceKill) break;
 
-      if (outcome === "done") {
+      if (sliceResult.status === "done") {
+        consecutiveErrors = 0;
         completed++;
         const lastHistory = state.history[state.history.length - 1];
         if (lastHistory?.costUsd) totalCostUsd += lastHistory.costUsd;
-      } else if (outcome === "no_changes") {
-        // No changes — auto-advance handled inside runOneSlice
+
+        // If checks failed, create a fix slice for the next iteration
+        if (sliceResult.checksPassed === false && sliceResult.checkOutput) {
+          const fixCount = Object.keys(state.slices).filter((id) => id.includes(":fix-")).length;
+          if (fixCount < MAX_FIX_ATTEMPTS) {
+            const fixSlice = createFixSlice(slice, sliceResult.checkOutput, state.slices);
+            state.slices[fixSlice.id] = fixSlice;
+            await writeState(projectRoot, state);
+            pendingCheckFailure = sliceResult.checkOutput;
+            console.log(`  Created fix slice: ${fixSlice.id}`);
+          } else {
+            console.log(`  Checks failed but max fix attempts (${MAX_FIX_ATTEMPTS}) reached.`);
+          }
+        }
+      } else if (sliceResult.status === "no_changes") {
+        consecutiveErrors = 0;
         completed++;
       } else {
-        // Error — reset tree, move on to next slice
+        consecutiveErrors++;
         await resetWorkingTree();
       }
     }
@@ -203,6 +231,9 @@ async function cmdAfk(args: string[]) {
   console.log(`  Completed: ${completed}`);
   console.log(`  Time:      ${elapsedMinutes} min`);
   console.log(`  Cost:      $${totalCostUsd.toFixed(2)}`);
+  if (consecutiveErrors >= CIRCUIT_BREAKER_THRESHOLD) {
+    console.log(`  ⚠ Stopped due to ${consecutiveErrors} consecutive errors`);
+  }
 }
 
 // --- status ---
@@ -323,8 +354,9 @@ async function runOneSlice(
   projectRoot: string,
   state: EmberState,
   slice: SliceState,
-  config: EmberConfig
-): Promise<string> {
+  config: EmberConfig,
+  checkFailureContext?: string | null
+): Promise<SliceResult> {
   const runId = generateRunId();
   const logger = createRunLog(projectRoot, runId);
 
@@ -340,13 +372,12 @@ async function runOneSlice(
   };
   await writeState(projectRoot, state);
 
-  const outcome = await executeSlice(state, slice, config, logger, projectRoot);
+  const sliceResult = await executeSlice(state, slice, config, logger, projectRoot, checkFailureContext ?? undefined);
 
-  if (outcome === "no_changes") {
+  if (sliceResult.status === "no_changes") {
     slice.reviewIterations++;
 
     if (slice.reviewIterations >= NO_CHANGES_THRESHOLD) {
-      // Claude confirmed no changes needed multiple times — auto-advance
       console.log(`  Auto-advancing (verified ${slice.reviewIterations}x with no changes needed)`);
       transitionSlice(state, slice.id, "done");
 
@@ -371,7 +402,6 @@ async function runOneSlice(
     }
   }
 
-  // Clean up: any non-done slice that's still running gets marked failed
   if (slice.status === "running") {
     transitionSlice(state, slice.id, "failed");
   }
@@ -380,7 +410,7 @@ async function runOneSlice(
   await writeState(projectRoot, state);
   await logger.close();
 
-  return outcome;
+  return sliceResult;
 }
 
 // --- Interrupt handling ---

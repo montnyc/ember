@@ -4,6 +4,7 @@ export interface EmberConfig {
   runner: {
     type: "claude";
     model: string;
+    timeoutMs: number;
   };
   loop: {
     maxReviewIterations: number;
@@ -11,6 +12,7 @@ export interface EmberConfig {
   };
   checks: {
     default: string[];
+    enabled: boolean;
   };
 }
 

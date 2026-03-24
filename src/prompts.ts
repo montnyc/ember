@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { EmberConfig, PrdState, SliceState } from "./types";
 
 /**
@@ -11,7 +13,8 @@ export function buildWorkPrompt(
   slice: SliceState,
   prd: PrdState,
   memory: string,
-  _config: EmberConfig
+  _config: EmberConfig,
+  checkFailureContext?: string
 ): string {
   // Build criteria status list showing what's done and what's current
   const criteriaStatus = Object.entries(prd.criteria)
@@ -25,7 +28,15 @@ export function buildWorkPrompt(
   const doneCount = Object.values(prd.criteria).filter((c) => c.status === "done").length;
   const totalCount = Object.keys(prd.criteria).length;
 
-  return `@docs/prd/${prd.filename} @EMBER.md
+  // Auto-detect project CLAUDE.md for conventions/context
+  const projectRoot = _config.runner.type === "claude" ? process.cwd() : ".";
+  const claudeMdRef = existsSync(path.join(projectRoot, "CLAUDE.md")) ? " @CLAUDE.md" : "";
+
+  const checkContext = checkFailureContext
+    ? `\n## Previous Check Failures\n\nThe previous slice's changes broke these checks. Fix them as part of your work:\n\n\`\`\`\n${checkFailureContext.slice(0, 3000)}\n\`\`\`\n`
+    : "";
+
+  return `@docs/prd/${prd.filename} @EMBER.md${claudeMdRef}
 
 You are working on PRD ${prd.id}: ${prd.title}
 Progress: ${doneCount}/${totalCount} acceptance criteria complete.
@@ -44,7 +55,7 @@ Rules:
 5. Do NOT edit the PRD file itself.
 6. Do NOT work on other criteria — only the ones specified above.
 
-## Current Project Memory
+${checkContext}## Current Project Memory
 
 ${memory}
 `;

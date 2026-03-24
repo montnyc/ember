@@ -74,6 +74,42 @@ export function createSliceFromProposal(
   };
 }
 
+/**
+ * Create a fix slice to address check failures from a completed slice.
+ */
+export function createFixSlice(
+  originalSlice: SliceState,
+  checkOutput: string,
+  existingSlices: Record<string, SliceState>
+): SliceState {
+  // Find next fix number for this PRD
+  let n = 1;
+  const prefix = `${originalSlice.prdId}:fix-`;
+  for (const id of Object.keys(existingSlices)) {
+    if (id.startsWith(prefix)) {
+      const num = parseInt(id.slice(prefix.length), 10);
+      if (num >= n) n = num + 1;
+    }
+  }
+
+  const firstLine = checkOutput.split("\n").find((l) => l.trim())?.slice(0, 80) ?? "check failure";
+
+  return {
+    id: `${prefix}${n}`,
+    prdId: originalSlice.prdId,
+    kind: "direct",
+    title: `Fix: ${firstLine}`,
+    status: "pending",
+    criterionIds: originalSlice.criterionIds,
+    dependsOn: [],
+    createdBy: "system",
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+    reviewIterations: 0,
+    blockReason: null,
+  };
+}
+
 const VALID_TRANSITIONS: Record<SliceStatus, SliceStatus[]> = {
   pending: ["running", "blocked"],
   running: ["done", "blocked", "failed"],

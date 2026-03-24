@@ -5,6 +5,7 @@ export const DEFAULT_CONFIG: EmberConfig = {
   runner: {
     type: "claude",
     model: "sonnet",
+    timeoutMs: 600_000, // 10 minutes
   },
   loop: {
     maxReviewIterations: 3,
@@ -12,6 +13,7 @@ export const DEFAULT_CONFIG: EmberConfig = {
   },
   checks: {
     default: ["bun test", "bunx tsc --noEmit"],
+    enabled: true,
   },
 };
 
