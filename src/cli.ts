@@ -127,10 +127,25 @@ async function cmdInit() {
     (s) => s.status === "pending"
   ).length;
 
+  // Auto-install /ember-prd skill for Claude Code if not already present
+  const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
+  const skillPath = path.join(HOME, ".claude", "skills", "ember-prd", "SKILL.md");
+  if (HOME && !(await Bun.file(skillPath).exists())) {
+    try {
+      await import("./install-skill");
+    } catch {
+      // Skill install is non-critical — don't block init
+    }
+  }
+
   console.log(`Ember initialized in ${projectRoot}`);
   console.log(`  PRDs:     ${prdCount}`);
   console.log(`  Criteria: ${criteriaCount}`);
   console.log(`  Slices:   ${sliceCount} (${pendingSlices} pending)`);
+  if (prdCount === 0) {
+    console.log(`\n  No PRDs found. Create one with:`);
+    console.log(`    ember plan "describe what you want to build"`);
+  }
 }
 
 // --- run ---
