@@ -86,6 +86,7 @@ function renderOpenSlices(state: EmberState): string[] {
 }
 
 function renderLearnings(recentLearnings: string[]): string[] {
+  // Show only last 10 to keep EMBER.md concise
   const learnings = recentLearnings.slice(-10);
   if (learnings.length === 0) return ["- No learnings recorded yet"];
   return learnings.map((learning) => `- ${learning}`);

@@ -568,10 +568,15 @@ function generateRunId(): string {
 
 async function findProjectRoot(): Promise<string> {
   let dir = process.cwd();
+  // Walk up to 50 ancestor directories (typical filesystem depth < 10)
   for (let depth = 0; depth < 50 && dir !== "/"; depth++) {
     const gitDir = path.join(dir, ".git");
     if (await Bun.file(gitDir).exists()) return dir;
-    try { if ((await Bun.$`test -d ${gitDir}`.quiet()).exitCode === 0) return dir; } catch {}
+    try {
+      if ((await Bun.$`test -d ${gitDir}`.quiet()).exitCode === 0) return dir;
+    } catch {
+      // .git is neither a file nor directory at this level; continue up
+    }
     dir = path.dirname(dir);
   }
   return process.cwd();

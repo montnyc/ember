@@ -96,7 +96,7 @@ export async function executeSlice(
         .filter((r) => r.exitCode !== 0)
         .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
         .join("\n---\n")
-        .slice(0, 5000); // cap output size
+        .slice(0, 5000); // cap at 5KB to fit in next prompt without bloating context
       console.log(`  Checks FAILED`);
     } else {
       console.log(`  Checks passed`);

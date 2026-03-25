@@ -13,7 +13,7 @@ export function buildWorkPrompt(
   slice: SliceState,
   prd: PrdState,
   memory: string,
-  _config: EmberConfig,
+  config: EmberConfig,
   checkFailureContext?: string
 ): string {
   // Build criteria status list showing what's done and what's current
@@ -29,7 +29,7 @@ export function buildWorkPrompt(
   const totalCount = Object.keys(prd.criteria).length;
 
   // Auto-detect project CLAUDE.md for conventions/context
-  const projectRoot = _config.runner.type === "claude" ? process.cwd() : ".";
+  const projectRoot = config.runner.type === "claude" ? process.cwd() : ".";
   const claudeMdRef = existsSync(path.join(projectRoot, "CLAUDE.md")) ? " @CLAUDE.md" : "";
 
   const checkContext = checkFailureContext

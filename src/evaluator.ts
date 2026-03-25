@@ -123,9 +123,11 @@ function parseEvalOutput(output: string): EvalResult {
       issues: Array.isArray(parsed.issues) ? parsed.issues.filter((i: unknown) => typeof i === "string") : [],
       summary: typeof parsed.summary === "string" ? parsed.summary : "No summary provided.",
     };
-  } catch {
-    // Failed to parse — treat as pass with warning
-    console.log(`  Evaluator output wasn't valid JSON, skipping.`);
+  } catch (error) {
+    // Evaluator produced non-JSON output. Treat as pass so we don't block the
+    // pipeline on evaluator bugs, but log the error so it's visible.
+    console.error(`  Evaluator output wasn't valid JSON: ${(error as Error).message}`);
+    console.error(`  Raw output (first 200 chars): ${trimmed.slice(0, 200)}`);
     return { passed: true, issues: [], summary: "Evaluator output unparseable." };
   }
 }
