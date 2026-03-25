@@ -3,6 +3,7 @@ import { buildWorkPrompt } from "./prompts";
 import { getHead, commitAll, hasUncommittedChanges } from "./git";
 import { writeMemory, renderMemory } from "./memory";
 import { runChecks } from "./checks";
+import { evaluateSlice } from "./evaluator";
 import { transitionSlice } from "./slices";
 import { writeState } from "./state";
 import type { EmberConfig, EmberState, SliceState } from "./types";
@@ -100,6 +101,25 @@ export async function executeSlice(
     } else {
       console.log(`  Checks passed`);
     }
+  }
+
+  // --- Evaluate with separate agent (skeptical reviewer) ---
+  console.log(`  Evaluating...`);
+  const evalResult = await evaluateSlice(slice, prd, config, projectRoot);
+
+  if (!evalResult.passed && evalResult.issues.length > 0) {
+    console.log(`  Evaluator found ${evalResult.issues.length} issue(s):`);
+    for (const issue of evalResult.issues.slice(0, 3)) {
+      console.log(`    - ${issue.slice(0, 100)}`);
+    }
+    // Combine eval issues with check output for the fix slice
+    const evalOutput = evalResult.issues.join("\n");
+    const combinedOutput = [checkOutput, evalOutput].filter(Boolean).join("\n---\n");
+    return { status: "done", checksPassed: false, checkOutput: combinedOutput };
+  }
+
+  if (evalResult.passed) {
+    console.log(`  Evaluation passed: ${evalResult.summary}`);
   }
 
   // --- Mark slice done ---

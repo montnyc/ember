@@ -45,6 +45,9 @@ async function main() {
     case "reset":
       await cmdReset(args.slice(1));
       break;
+    case "plan":
+      await cmdPlan(args.slice(1));
+      break;
     case "install-skill":
       await import("./install-skill");
       break;
@@ -55,10 +58,28 @@ async function main() {
   }
 }
 
+// --- plan ---
+
+async function cmdPlan(args: string[]) {
+  const description = args.join(" ").trim();
+  if (!description) {
+    console.error('Usage: ember plan "Build a dashboard for daily pipeline runs"');
+    process.exit(1);
+  }
+
+  const projectRoot = await findProjectRoot();
+  setGitRoot(projectRoot);
+  await ensureEmberDirs(projectRoot);
+
+  const { generatePrd } = await import("./planner");
+  await generatePrd(description, projectRoot);
+}
+
 function printUsage() {
   console.log(`Usage: ember <command>
 
 Commands:
+  plan "<description>"          Generate a PRD from a brief description
   init                          Initialize and sync PRDs (re-run to unstick)
   run [--slice <id>]            Run one slice
   afk [--max-slices N]          Run slices until done or cap
