@@ -10,10 +10,11 @@ interface MenuAction {
   disabled?: boolean;
 }
 
-export function HomeScreen({ state, onStartRun, onExit }: {
+export function HomeScreen({ state, onStartRun, onExit, onSessions }: {
   state: AppState;
   onStartRun: (maxSlices?: number) => void;
   onExit: () => void;
+  onSessions: () => void;
 }) {
   const [menuIdx, setMenuIdx] = useState(0);
 
@@ -41,6 +42,12 @@ export function HomeScreen({ state, onStartRun, onExit }: {
       key: "2",
       action: () => onStartRun(20),
       disabled: !hasPrds,
+    },
+    {
+      label: "View past sessions",
+      description: "Browse run history and details",
+      key: "v",
+      action: onSessions,
     },
     {
       label: "Quit",
@@ -137,7 +144,9 @@ export function HomeScreen({ state, onStartRun, onExit }: {
           <span fg="#444"> │ </span>
           <span fg="#888">a</span> run all
           <span fg="#444"> │ </span>
-          <span fg="#888">5</span> quick run
+          <span fg="#888">5</span> quick
+          <span fg="#444"> │ </span>
+          <span fg="#888">v</span> sessions
           <span fg="#444"> │ </span>
           <span fg="#888">q</span> quit
         </text>

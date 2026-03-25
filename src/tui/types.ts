@@ -34,14 +34,16 @@ export interface PrdInfo {
 
 export interface RunHistoryEntry {
   runId: string;
+  sliceId: string;
   date: string;
+  verdict: string;
   slicesCompleted: number;
   slicesFailed: number;
   totalCost: number;
   durationMin: number;
 }
 
-export type Screen = "home" | "run";
+export type Screen = "home" | "run" | "sessions";
 
 export interface AppState {
   screen: Screen;

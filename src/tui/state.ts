@@ -39,7 +39,9 @@ export async function buildHomeState(projectRoot: string): Promise<AppState> {
 
   const history = state.history.slice(-10).map((h) => ({
     runId: h.runId,
+    sliceId: h.sliceId,
     date: h.completedAt.slice(0, 10),
+    verdict: h.verdict,
     slicesCompleted: h.verdict === "done" ? 1 : 0,
     slicesFailed: h.verdict !== "done" ? 1 : 0,
     totalCost: h.costUsd ?? 0,

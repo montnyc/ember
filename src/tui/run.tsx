@@ -1,6 +1,10 @@
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useState, useEffect } from "react";
 import type { AppState, ToolEvent } from "./types";
+import { MessageBlock } from "./messages";
+import { Sidebar } from "./sidebar";
+import { CommandPalette } from "./palette";
+import type { PaletteAction } from "./palette";
 
 type Tab = "activity" | "diff" | "code";
 
@@ -13,10 +17,11 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
 }) {
   const [tab, setTab] = useState<Tab>("activity");
   const [sliceScroll, setSliceScroll] = useState(0);
+  const [showPalette, setShowPalette] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(true);
   const { height } = useTerminalDimensions();
   const [elapsedDisplay, setElapsedDisplay] = useState("0.0");
 
-  // Live elapsed timer
   useEffect(() => {
     if (state.mode !== "running" || !state.startTimeMs) return;
     const interval = setInterval(() => {
@@ -25,7 +30,21 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
     return () => clearInterval(interval);
   }, [state.mode, state.startTimeMs]);
 
+  const paletteActions: PaletteAction[] = [
+    { id: "tab-activity", title: "Show Activity", shortcut: "1", action: () => setTab("activity") },
+    { id: "tab-diff", title: "Show Diff", shortcut: "2", action: () => setTab("diff") },
+    { id: "tab-code", title: "Show Files", shortcut: "3", action: () => setTab("code") },
+    { id: "toggle-sidebar", title: "Toggle Sidebar", shortcut: "b", action: () => setShowSidebar((s) => !s) },
+    { id: "pause", title: state.mode === "paused" ? "Resume" : "Pause", shortcut: "p", action: onPause },
+    { id: "skip", title: "Skip Current Slice", shortcut: "s", action: onSkip },
+    { id: "home", title: "Go Home", shortcut: "h", action: onHome },
+    { id: "quit", title: "Quit", shortcut: "q", action: onExit },
+  ];
+
   useKeyboard((key) => {
+    if (showPalette) return; // palette handles its own keys
+
+    if (key.ctrl && key.name === "p") { setShowPalette(true); return; }
     if (key.name === "q" || key.name === "escape") {
       if (state.mode === "finished") onHome();
       else onExit();
@@ -35,11 +54,10 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
     if (key.name === "1") setTab("activity");
     if (key.name === "2") setTab("diff");
     if (key.name === "3") setTab("code");
+    if (key.name === "b") setShowSidebar((s) => !s);
 
     if (key.name === "up") setSliceScroll((s) => Math.max(0, s - 1));
     if (key.name === "down") setSliceScroll((s) => Math.min(state.slices.length - 1, s + 1));
-    if (key.name === "pageup") setSliceScroll((s) => Math.max(0, s - 10));
-    if (key.name === "pagedown") setSliceScroll((s) => Math.min(state.slices.length - 1, s + 10));
 
     if (key.name === "p") onPause();
     if (key.name === "s") onSkip();
@@ -51,7 +69,6 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
   const modeLabel = paused ? "paused" : state.mode === "running" ? "running" : state.mode;
   const modeColor = paused ? "#eab308" : state.mode === "running" ? "#22c55e" : state.mode === "finished" ? "#3b82f6" : "#666";
 
-  // Progress
   const total = state.slices.length;
   const done = state.completed + state.failed;
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
@@ -61,6 +78,13 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
 
   return (
     <box flexDirection="column" width="100%" height="100%" backgroundColor="#0a0a0a">
+      {/* Command palette overlay */}
+      {showPalette && (
+        <box position="absolute" top={2} left={10} zIndex={100}>
+          <CommandPalette actions={paletteActions} onClose={() => setShowPalette(false)} />
+        </box>
+      )}
+
       {/* Header */}
       <box flexDirection="row" justifyContent="space-between" paddingX={1}>
         <text>
@@ -92,12 +116,12 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
       {/* Main content */}
       <box flexDirection="row" flexGrow={1}>
         {/* Slice list */}
-        <box width="35%" flexDirection="column" border borderStyle="single" borderColor="#333" paddingX={1}>
+        <box width="30%" flexDirection="column" border borderStyle="single" borderColor="#333" paddingX={1}>
           <SliceList state={state} scrollOffset={sliceScroll} maxVisible={maxVisible} />
         </box>
 
-        {/* Right panel */}
-        <box width="65%" flexDirection="column" border borderStyle="single" borderColor="#333">
+        {/* Center: Activity/Diff/Code */}
+        <box flexGrow={1} flexDirection="column" border borderStyle="single" borderColor="#333">
           <box paddingX={1}>
             <text fg="#888">
               {tab === "activity" ? "Activity" : tab === "diff" ? "Diff" : "Files"}
@@ -110,23 +134,24 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
             {tab === "code" && <CodeTab events={state.events} />}
           </box>
         </box>
+
+        {/* Right sidebar */}
+        {showSidebar && <Sidebar state={state} />}
       </box>
 
       {/* Footer */}
       <box paddingX={1}>
         <text fg="#555">
-          <span fg="#888">1</span> activity  <span fg="#888">2</span> diff  <span fg="#888">3</span> code
+          <span fg="#888">ctrl+p</span> commands
+          <span fg="#444"> │ </span>
+          <span fg="#888">1-3</span> tabs
+          <span fg="#444"> │ </span>
+          <span fg="#888">b</span> sidebar
           <span fg="#444"> │ </span>
           <span fg="#888">↑↓</span> scroll
           {state.mode === "running" && <>
             <span fg="#444"> │ </span>
             <span fg="#888">p</span> pause
-            <span fg="#444"> │ </span>
-            <span fg="#888">s</span> skip
-          </>}
-          {state.mode === "paused" && <>
-            <span fg="#444"> │ </span>
-            <span fg="#888">p</span> resume
           </>}
           {state.mode === "finished" && <>
             <span fg="#444"> │ </span>
@@ -140,7 +165,7 @@ export function RunScreen({ state, onExit, onPause, onSkip, onHome }: {
   );
 }
 
-// --- Slice List ---
+// --- Sub-components ---
 
 function SliceList({ state, scrollOffset, maxVisible }: { state: AppState; scrollOffset: number; maxVisible: number }) {
   const visible = state.slices.slice(scrollOffset, scrollOffset + maxVisible);
@@ -149,35 +174,26 @@ function SliceList({ state, scrollOffset, maxVisible }: { state: AppState; scrol
 
   return (
     <>
-      {hasLess && <text fg="#555">  ↑ {scrollOffset} more</text>}
+      {hasLess && <text fg="#555"> ↑ {scrollOffset} more</text>}
       {visible.map((slice, i) => {
         const idx = scrollOffset + i;
         const active = idx === state.currentSliceIndex && state.mode === "running";
-        const icon = slice.status === "done" ? "✓"
-          : slice.status === "failed" ? "✗"
-          : slice.status === "no_changes" ? "○"
-          : slice.status === "running" ? "▸"
-          : "·";
-        const iconColor = slice.status === "done" ? "#22c55e"
-          : slice.status === "failed" ? "#ef4444"
-          : slice.status === "running" ? "#f97316"
-          : "#333";
+        const icon = slice.status === "done" ? "✓" : slice.status === "failed" ? "✗" : slice.status === "running" ? "▸" : slice.status === "no_changes" ? "○" : "·";
+        const iconColor = slice.status === "done" ? "#22c55e" : slice.status === "failed" ? "#ef4444" : slice.status === "running" ? "#f97316" : "#333";
         const textColor = active ? "#fff" : slice.status === "done" ? "#555" : "#999";
 
         return (
           <box key={slice.id} flexDirection="row" backgroundColor={active ? "#1a1a2e" : undefined}>
             <text fg={iconColor} width={2}>{icon}</text>
             <text fg="#666" width={8}>{slice.criterionId}</text>
-            <text fg={textColor}>{slice.title.slice(0, 45)}</text>
+            <text fg={textColor}>{slice.title.slice(0, 35)}</text>
           </box>
         );
       })}
-      {hasMore && <text fg="#555">  ↓ {state.slices.length - scrollOffset - maxVisible} more</text>}
+      {hasMore && <text fg="#555"> ↓ {state.slices.length - scrollOffset - maxVisible} more</text>}
     </>
   );
 }
-
-// --- Activity Tab ---
 
 function ActivityTab({ events, maxVisible }: { events: ToolEvent[]; maxVisible: number }) {
   const visible = events.slice(-maxVisible);
@@ -186,71 +202,17 @@ function ActivityTab({ events, maxVisible }: { events: ToolEvent[]; maxVisible: 
     <scrollbox focused flexGrow={1} paddingX={1}>
       {visible.length === 0 && <text fg="#555">Waiting for activity...</text>}
       {visible.map((event, i) => (
-        <EventRow key={i} event={event} />
+        <MessageBlock key={i} event={event} />
       ))}
     </scrollbox>
   );
 }
 
-function EventRow({ event }: { event: ToolEvent }) {
-  if (event.type === "tool_use") {
-    const nameColor = event.name === "Write" || event.name === "Edit" ? "#f97316"
-      : event.name === "Bash" ? "#a855f7"
-      : event.name === "Read" || event.name === "Glob" || event.name === "Grep" ? "#3b82f6"
-      : "#eab308";
-    return (
-      <box flexDirection="row">
-        <text fg={nameColor} width={10}><strong>{event.name ?? "tool"}</strong></text>
-        <text fg="#777">{event.detail?.slice(0, 90) ?? ""}</text>
-      </box>
-    );
-  }
-
-  if (event.type === "tool_result") {
-    const icon = event.isError ? "  ✗ error" : "  ✓";
-    const color = event.isError ? "#ef4444" : "#333";
-    return <text fg={color}>{icon}</text>;
-  }
-
-  if (event.type === "text") return <text fg="#a3a3a3">  {event.detail?.slice(0, 90)}</text>;
-
-  if (event.type === "done") {
-    const cost = event.cost ? ` $${event.cost.toFixed(4)}` : "";
-    const dur = event.durationSec ? ` ${event.durationSec.toFixed(1)}s` : "";
-    return <text fg="#22c55e">  ✓ done{cost}{dur}</text>;
-  }
-
-  if (event.type === "commit") {
-    return (
-      <box flexDirection="row">
-        <text fg="#22c55e"><strong>  commit </strong></text>
-        <text fg="#888">{event.detail}</text>
-      </box>
-    );
-  }
-
-  if (event.type === "slice_start") {
-    return <text fg="#f97316" marginTop={1}>━━ {event.detail} ━━</text>;
-  }
-
-  if (event.type === "slice_end") {
-    return <text fg={event.isError ? "#ef4444" : "#22c55e"}>━━ {event.detail} ━━</text>;
-  }
-
-  if (event.type === "error") {
-    return <text fg="#ef4444">  ✗ {event.detail}</text>;
-  }
-
-  return null;
-}
-
-// --- Diff Tab ---
-
 function DiffTab({ diff }: { diff: string }) {
   if (!diff.trim()) {
     return (
       <box paddingX={1}>
-        <text fg="#555">No diff yet — changes will appear here after the work step.</text>
+        <text fg="#555">No diff yet — changes appear after the work step.</text>
       </box>
     );
   }
@@ -273,8 +235,6 @@ function DiffTab({ diff }: { diff: string }) {
   );
 }
 
-// --- Code Tab ---
-
 function CodeTab({ events }: { events: ToolEvent[] }) {
   const writes = events.filter((e) => e.type === "tool_use" && (e.name === "Write" || e.name === "Edit"));
   const reads = events.filter((e) => e.type === "tool_use" && (e.name === "Read" || e.name === "Glob" || e.name === "Grep"));
@@ -283,22 +243,22 @@ function CodeTab({ events }: { events: ToolEvent[] }) {
   return (
     <box flexDirection="column" paddingX={1} gap={1}>
       <box flexDirection="column">
-        <text fg="#f97316" marginBottom={1}><strong>Files Modified ({writes.length})</strong></text>
+        <text fg="#f97316" marginBottom={1}><strong>Modified ({writes.length})</strong></text>
         {writes.length === 0 && <text fg="#555">  None yet</text>}
         {writes.map((e, i) => (
           <box key={i} flexDirection="row">
             <text fg={e.name === "Write" ? "#22c55e" : "#eab308"} width={8}>  {e.name}</text>
-            <text fg="#999">{e.detail?.slice(0, 80)}</text>
+            <text fg="#999">{e.detail?.slice(0, 70)}</text>
           </box>
         ))}
       </box>
 
       <box flexDirection="column">
-        <text fg="#3b82f6" marginBottom={1}><strong>Files Read ({reads.length})</strong></text>
-        {reads.slice(-10).map((e, i) => (
+        <text fg="#3b82f6" marginBottom={1}><strong>Read ({reads.length})</strong></text>
+        {reads.slice(-8).map((e, i) => (
           <box key={i} flexDirection="row">
             <text fg="#555" width={8}>  {e.name}</text>
-            <text fg="#666">{e.detail?.slice(0, 80)}</text>
+            <text fg="#666">{e.detail?.slice(0, 70)}</text>
           </box>
         ))}
       </box>
@@ -307,7 +267,7 @@ function CodeTab({ events }: { events: ToolEvent[] }) {
         <box flexDirection="column">
           <text fg="#a855f7" marginBottom={1}><strong>Commands ({commands.length})</strong></text>
           {commands.slice(-5).map((e, i) => (
-            <text key={i} fg="#777">  $ {e.detail?.slice(0, 80)}</text>
+            <text key={i} fg="#777">  $ {e.detail?.slice(0, 70)}</text>
           ))}
         </box>
       )}

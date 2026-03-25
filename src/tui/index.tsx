@@ -3,6 +3,7 @@ import { createRoot } from "@opentui/react";
 import { useState } from "react";
 import { HomeScreen } from "./home";
 import { RunScreen } from "./run";
+import { SessionList } from "./sessions";
 import type { AppState, SliceInfo } from "./types";
 import { buildHomeState, updateState, pushEvent } from "./state";
 import { streamEventToToolEvent } from "./events";
@@ -25,7 +26,15 @@ function App({ initialState, onExit, onStartRun, onPause, onSkip, onHome }: {
   (globalThis as any).__emberTuiUpdate = setState;
 
   if (state.screen === "home") {
-    return <HomeScreen state={state} onStartRun={onStartRun} onExit={onExit} />;
+    return <HomeScreen
+      state={state}
+      onStartRun={onStartRun}
+      onExit={onExit}
+      onSessions={() => setState((s) => ({ ...s, screen: "sessions" }))}
+    />;
+  }
+  if (state.screen === "sessions") {
+    return <SessionList state={state} onBack={() => setState((s) => ({ ...s, screen: "home" }))} />;
   }
   return <RunScreen state={state} onExit={onExit} onPause={onPause} onSkip={onSkip} onHome={onHome} />;
 }
