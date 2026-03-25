@@ -111,44 +111,48 @@ async function cmdInit() {
   if (!(await Bun.file(gitignorePath).exists())) {
     await Bun.write(gitignorePath, "# Ember artifacts — do not track\n*\n");
   }
-  const state = await syncState(projectRoot);
 
+  // Sync state from PRDs
+  const state = await syncState(projectRoot);
   const unstuck = unstickState(state);
   if (unstuck > 0 || state.currentRun) {
     state.currentRun = null;
     await writeState(projectRoot, state);
-    console.log(`  Unstuck:  ${unstuck} slice(s) reset to pending`);
   }
 
   const prdCount = Object.keys(state.prds).length;
   const criteriaCount = Object.values(state.prds).reduce(
-    (sum, prd) => sum + Object.keys(prd.criteria).length,
-    0
+    (sum, prd) => sum + Object.keys(prd.criteria).length, 0
   );
   const sliceCount = Object.keys(state.slices).length;
-  const pendingSlices = Object.values(state.slices).filter(
-    (s) => s.status === "pending"
-  ).length;
+  const pendingSlices = Object.values(state.slices).filter((s) => s.status === "pending").length;
 
-  // Auto-install /ember-prd skill for Claude Code if not already present
+  // Auto-install skill
   const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
   const skillPath = path.join(HOME, ".claude", "skills", "ember-prd", "SKILL.md");
+  let skillInstalled = false;
   if (HOME && !(await Bun.file(skillPath).exists())) {
-    try {
-      await import("./install-skill");
-    } catch {
-      // Skill install is non-critical — don't block init
-    }
+    try { await import("./install-skill"); skillInstalled = true; } catch {}
+  } else {
+    skillInstalled = true;
   }
 
-  console.log(`Ember initialized in ${projectRoot}`);
-  console.log(`  PRDs:     ${prdCount}`);
-  console.log(`  Criteria: ${criteriaCount}`);
-  console.log(`  Slices:   ${sliceCount} (${pendingSlices} pending)`);
-  if (prdCount === 0) {
-    console.log(`\n  No PRDs found. Create one with:`);
-    console.log(`    ember plan "describe what you want to build"`);
+  // Interactive TUI for model selection
+  const { runInitTui } = await import("./tui/init");
+  const result = await runInitTui({ prdCount, criteriaCount, sliceCount, pendingSlices, skillInstalled });
+
+  if (!result) {
+    console.log("Init cancelled.");
+    return;
   }
+
+  // Write config with selected model
+  const config = await loadConfig(projectRoot);
+  config.runner.model = result.model;
+  await Bun.write(
+    path.join(emberDir, "config.json"),
+    JSON.stringify(config, null, 2) + "\n"
+  );
 }
 
 // --- run ---
