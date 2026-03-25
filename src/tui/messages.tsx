@@ -1,12 +1,13 @@
+import { useTimeline } from "@opentui/react";
+import { useState, useEffect } from "react";
 import type { ToolEvent } from "./types";
 
 /**
- * Rich message rendering for the activity stream.
- * Replaces the flat emoji output with collapsible tool blocks,
- * thinking indicators, and nested formatting.
+ * Rich message rendering with animations.
+ * Uses OpenTUI's Timeline API for shimmer effects on active operations.
  */
-export function MessageBlock({ event }: { event: ToolEvent }) {
-  if (event.type === "tool_use") return <ToolCallBlock event={event} />;
+export function MessageBlock({ event, isLatest }: { event: ToolEvent; isLatest?: boolean }) {
+  if (event.type === "tool_use") return <ToolCallBlock event={event} active={isLatest} />;
   if (event.type === "tool_result") return <ToolResultBlock event={event} />;
   if (event.type === "text") return <ThinkingBlock event={event} />;
   if (event.type === "done") return <DoneBlock event={event} />;
@@ -17,41 +18,60 @@ export function MessageBlock({ event }: { event: ToolEvent }) {
   return null;
 }
 
-function ToolCallBlock({ event }: { event: ToolEvent }) {
+// --- Tool call with shimmer animation when active ---
+
+function ToolCallBlock({ event, active }: { event: ToolEvent; active?: boolean }) {
   const name = event.name ?? "tool";
   const detail = event.detail ?? "";
   const icon = toolIcon(name);
-  const nameColor = toolColor(name);
+  const color = toolColor(name);
+
+  // Shimmer animation: cycles opacity on the active tool call
+  const [shimmerOpacity, setShimmerOpacity] = useState(1);
+
+  const timeline = useTimeline({ loop: true, autoplay: !!active });
+  useEffect(() => {
+    if (!active) return;
+    timeline.add(
+      [{ value: 1 }],
+      { duration: 800, ease: "inOutSine", alternate: true, loop: true, onUpdate: (anim) => {
+        const v = anim.targets[0].value;
+        setShimmerOpacity(0.4 + v * 0.6);
+      }}
+    );
+    return () => { timeline.pause(); };
+  }, [active]);
 
   return (
-    <box flexDirection="column" marginBottom={0}>
-      <box flexDirection="row">
-        <text fg="#333" width={2}>│</text>
-        <text fg={nameColor}>{icon} </text>
-        <text fg={nameColor}><strong>{name}</strong></text>
-        <text fg="#555"> {detail.slice(0, 70)}</text>
-      </box>
+    <box flexDirection="row" opacity={active ? shimmerOpacity : 1}>
+      <text fg="#333" width={2}>│</text>
+      <text fg={color} width={2}>{icon}</text>
+      <text fg={color} width={8}><strong>{name}</strong></text>
+      <text fg="#666">{truncateDetail(detail, name)}</text>
     </box>
   );
 }
+
+// --- Tool result: subtle or error ---
 
 function ToolResultBlock({ event }: { event: ToolEvent }) {
   if (event.isError) {
     return (
       <box flexDirection="row">
         <text fg="#333" width={2}>│</text>
-        <text fg="#ef4444"> ✗ failed</text>
+        <text fg="#ef4444"> ✗ error</text>
       </box>
     );
   }
-  // Successful results are shown as a subtle tick
   return (
     <box flexDirection="row">
-      <text fg="#333" width={2}>│</text>
+      <text fg="#1a3a1a" width={2}>│</text>
       <text fg="#2a5a2a"> ✓</text>
     </box>
   );
 }
+
+// --- Thinking text: Claude's reasoning ---
 
 function ThinkingBlock({ event }: { event: ToolEvent }) {
   const text = event.detail ?? "";
@@ -60,10 +80,12 @@ function ThinkingBlock({ event }: { event: ToolEvent }) {
   return (
     <box flexDirection="row">
       <text fg="#333" width={2}>│</text>
-      <text fg="#888"> {text.slice(0, 80)}</text>
+      <text fg="#777"> {text.slice(0, 85)}</text>
     </box>
   );
 }
+
+// --- Done: cost + duration ---
 
 function DoneBlock({ event }: { event: ToolEvent }) {
   const cost = event.cost ? `$${event.cost.toFixed(4)}` : "";
@@ -71,41 +93,48 @@ function DoneBlock({ event }: { event: ToolEvent }) {
   const details = [cost, dur].filter(Boolean).join(" · ");
 
   return (
-    <box flexDirection="row" marginTop={0}>
+    <box flexDirection="row">
       <text fg="#333" width={2}>│</text>
-      <text fg="#22c55e"> ✓ done</text>
+      <text fg="#22c55e"> ● done</text>
       {details && <text fg="#555"> {details}</text>}
     </box>
   );
 }
 
+// --- Commit ---
+
 function CommitBlock({ event }: { event: ToolEvent }) {
   return (
-    <box flexDirection="row" marginTop={0}>
+    <box flexDirection="row">
       <text fg="#333" width={2}>│</text>
-      <text fg="#22c55e"> ⬡ </text>
+      <text fg="#22c55e" width={2}>◆</text>
       <text fg="#22c55e"><strong>commit</strong></text>
-      <text fg="#888"> {event.detail?.slice(0, 60)}</text>
+      <text fg="#888"> {event.detail?.slice(0, 55)}</text>
     </box>
   );
 }
 
+// --- Slice boundaries ---
+
 function SliceStartBlock({ event }: { event: ToolEvent }) {
   return (
-    <box marginTop={1} marginBottom={0}>
-      <text fg="#f97316">┌─ {event.detail} ─</text>
+    <box marginTop={1}>
+      <text fg="#f97316">┌── {event.detail} ──</text>
     </box>
   );
 }
 
 function SliceEndBlock({ event }: { event: ToolEvent }) {
   const color = event.isError ? "#ef4444" : "#22c55e";
+  const icon = event.isError ? "✗" : "●";
   return (
     <box marginBottom={1}>
-      <text fg={color}>└─ {event.detail} ─</text>
+      <text fg={color}>└── {icon} {event.detail} ──</text>
     </box>
   );
 }
+
+// --- Error ---
 
 function ErrorBlock({ event }: { event: ToolEvent }) {
   return (
@@ -119,32 +148,41 @@ function ErrorBlock({ event }: { event: ToolEvent }) {
 // --- Helpers ---
 
 function toolIcon(name: string): string {
+  // Simple ASCII icons — no emojis, clean in any terminal
   switch (name) {
-    case "Read": return "📄";
-    case "Write": return "✏️";
-    case "Edit": return "✏️";
-    case "Bash": return "⚡";
-    case "Glob": return "🔍";
-    case "Grep": return "🔍";
-    case "Agent": return "🤖";
-    default: return "🔧";
+    case "Read":  return "◇";
+    case "Write": return "◈";
+    case "Edit":  return "◈";
+    case "Bash":  return "›";
+    case "Glob":  return "○";
+    case "Grep":  return "○";
+    case "Agent": return "◉";
+    default:      return "·";
   }
 }
 
 function toolColor(name: string): string {
   switch (name) {
-    case "Write":
-    case "Edit":
-      return "#f97316"; // orange — mutations
-    case "Bash":
-      return "#a855f7"; // purple — commands
-    case "Read":
-    case "Glob":
-    case "Grep":
-      return "#3b82f6"; // blue — reads
-    case "Agent":
-      return "#ec4899"; // pink — sub-agents
-    default:
-      return "#eab308"; // yellow — other
+    case "Write": case "Edit": return "#f97316";
+    case "Bash":               return "#a855f7";
+    case "Read": case "Glob": case "Grep": return "#3b82f6";
+    case "Agent":              return "#ec4899";
+    default:                   return "#eab308";
   }
+}
+
+function truncateDetail(detail: string, toolName: string): string {
+  // For Bash, show the command. For files, show the path.
+  const maxLen = 65;
+  if (detail.length <= maxLen) return detail;
+
+  // Try to show just the filename for paths
+  if (toolName === "Read" || toolName === "Write" || toolName === "Edit") {
+    const parts = detail.split("/");
+    if (parts.length > 2) {
+      return "…/" + parts.slice(-2).join("/");
+    }
+  }
+
+  return detail.slice(0, maxLen - 1) + "…";
 }

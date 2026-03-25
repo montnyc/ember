@@ -202,7 +202,7 @@ function ActivityTab({ events, maxVisible }: { events: ToolEvent[]; maxVisible: 
     <scrollbox focused flexGrow={1} paddingX={1}>
       {visible.length === 0 && <text fg="#555">Waiting for activity...</text>}
       {visible.map((event, i) => (
-        <MessageBlock key={i} event={event} />
+        <MessageBlock key={i} event={event} isLatest={i === visible.length - 1 && event.type === "tool_use"} />
       ))}
     </scrollbox>
   );
