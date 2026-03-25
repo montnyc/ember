@@ -1,15 +1,25 @@
 import { useTimeline } from "@opentui/react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { ToolEvent } from "./types";
 
+// --- Spinner frames for active operations ---
+const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_INTERVAL_MS = 80;
+
 /**
- * Rich message rendering with animations.
- * Uses OpenTUI's Timeline API for shimmer effects on active operations.
+ * Rich message rendering with animations inspired by OpenCode's BasicTool.
+ *
+ * Active tool calls get:
+ * - Spinning braille indicator
+ * - Color shimmer cycling through bright→dim on the tool name
+ * - Highlighted background
+ *
+ * Completed items are compact and dimmed.
  */
 export function MessageBlock({ event, isLatest }: { event: ToolEvent; isLatest?: boolean }) {
   if (event.type === "tool_use") return <ToolCallBlock event={event} active={isLatest} />;
   if (event.type === "tool_result") return <ToolResultBlock event={event} />;
-  if (event.type === "text") return <ThinkingBlock event={event} />;
+  if (event.type === "text") return <ThinkingBlock event={event} active={isLatest} />;
   if (event.type === "done") return <DoneBlock event={event} />;
   if (event.type === "commit") return <CommitBlock event={event} />;
   if (event.type === "slice_start") return <SliceStartBlock event={event} />;
@@ -18,85 +28,131 @@ export function MessageBlock({ event, isLatest }: { event: ToolEvent; isLatest?:
   return null;
 }
 
-// --- Tool call with shimmer animation when active ---
+// --- Animated spinner hook ---
 
-function ToolCallBlock({ event, active }: { event: ToolEvent; active?: boolean }) {
-  const name = event.name ?? "tool";
-  const detail = event.detail ?? "";
-  const icon = toolIcon(name);
-  const color = toolColor(name);
+function useSpinner(active?: boolean): string {
+  const [frame, setFrame] = useState(0);
 
-  // Shimmer animation: cycles opacity on the active tool call
-  const [shimmerOpacity, setShimmerOpacity] = useState(1);
+  useEffect(() => {
+    if (!active) return;
+    const interval = setInterval(() => {
+      setFrame((f) => (f + 1) % SPINNER.length);
+    }, SPINNER_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [active]);
+
+  return active ? SPINNER[frame] : " ";
+}
+
+// --- Shimmer: cycles the tool name color bright→dim→bright ---
+
+function useShimmerColor(baseColor: string, active?: boolean): string {
+  const [blend, setBlend] = useState(1);
 
   const timeline = useTimeline({ loop: true, autoplay: !!active });
   useEffect(() => {
-    if (!active) return;
+    if (!active) { setBlend(1); return; }
     timeline.add(
-      [{ value: 1 }],
-      { duration: 800, ease: "inOutSine", alternate: true, loop: true, onUpdate: (anim) => {
-        const v = anim.targets[0].value;
-        setShimmerOpacity(0.4 + v * 0.6);
-      }}
+      [{ value: 0 }],
+      {
+        duration: 1200,
+        ease: "inOutSine",
+        alternate: true,
+        loop: true,
+        onUpdate: (anim) => { setBlend(anim.targets[0].value); },
+      }
     );
     return () => { timeline.pause(); };
   }, [active]);
 
+  if (!active) return baseColor;
+  // Blend between baseColor and a dim version
+  return blend > 0.5 ? baseColor : dimColor(baseColor);
+}
+
+function dimColor(hex: string): string {
+  // Simple dim: mix toward #333
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  const mix = 0.4;
+  const dr = Math.round(r * mix + 0x33 * (1 - mix));
+  const dg = Math.round(g * mix + 0x33 * (1 - mix));
+  const db = Math.round(b * mix + 0x33 * (1 - mix));
+  return `#${dr.toString(16).padStart(2, "0")}${dg.toString(16).padStart(2, "0")}${db.toString(16).padStart(2, "0")}`;
+}
+
+// --- Tool call: the main visual element ---
+
+function ToolCallBlock({ event, active }: { event: ToolEvent; active?: boolean }) {
+  const name = event.name ?? "tool";
+  const detail = event.detail ?? "";
+  const baseColor = toolColor(name);
+  const shimmerColor = useShimmerColor(baseColor, active);
+  const spinner = useSpinner(active);
+
   return (
-    <box flexDirection="row" opacity={active ? shimmerOpacity : 1}>
-      <text fg="#333" width={2}>│</text>
-      <text fg={color} width={2}>{icon}</text>
-      <text fg={color} width={8}><strong>{name}</strong></text>
-      <text fg="#666">{truncateDetail(detail, name)}</text>
+    <box
+      flexDirection="row"
+      backgroundColor={active ? "#111318" : undefined}
+      paddingX={active ? 0 : 0}
+    >
+      <text fg={active ? baseColor : "#333"} width={2}>{active ? spinner : "│"}</text>
+      <text fg={shimmerColor} width={2}>{toolIcon(name)}</text>
+      <text fg={shimmerColor}><strong>{name.padEnd(7)}</strong></text>
+      <text fg={active ? "#999" : "#555"}>{truncateDetail(detail, name)}</text>
     </box>
   );
 }
 
-// --- Tool result: subtle or error ---
+// --- Tool result ---
 
 function ToolResultBlock({ event }: { event: ToolEvent }) {
   if (event.isError) {
     return (
       <box flexDirection="row">
         <text fg="#333" width={2}>│</text>
-        <text fg="#ef4444"> ✗ error</text>
+        <text fg="#ef4444">  ✗ failed</text>
       </box>
     );
   }
+  // Subtle — just a thin check, doesn't take visual space
   return (
     <box flexDirection="row">
-      <text fg="#1a3a1a" width={2}>│</text>
-      <text fg="#2a5a2a"> ✓</text>
+      <text fg="#222" width={2}>│</text>
+      <text fg="#1e3a1e">  ✓</text>
     </box>
   );
 }
 
-// --- Thinking text: Claude's reasoning ---
+// --- Thinking: Claude's reasoning with subtle animation ---
 
-function ThinkingBlock({ event }: { event: ToolEvent }) {
+function ThinkingBlock({ event, active }: { event: ToolEvent; active?: boolean }) {
   const text = event.detail ?? "";
   if (!text.trim()) return null;
 
+  const spinner = useSpinner(active);
+
   return (
     <box flexDirection="row">
-      <text fg="#333" width={2}>│</text>
-      <text fg="#777"> {text.slice(0, 85)}</text>
+      <text fg={active ? "#555" : "#222"} width={2}>{active ? spinner : "│"}</text>
+      <text fg={active ? "#aaa" : "#555"}>  {text.slice(0, 80)}</text>
     </box>
   );
 }
 
-// --- Done: cost + duration ---
+// --- Done block with animated number ---
 
 function DoneBlock({ event }: { event: ToolEvent }) {
   const cost = event.cost ? `$${event.cost.toFixed(4)}` : "";
   const dur = event.durationSec ? `${event.durationSec.toFixed(1)}s` : "";
-  const details = [cost, dur].filter(Boolean).join(" · ");
+  const details = [cost, dur].filter(Boolean).join("  ");
 
   return (
     <box flexDirection="row">
-      <text fg="#333" width={2}>│</text>
-      <text fg="#22c55e"> ● done</text>
-      {details && <text fg="#555"> {details}</text>}
+      <text fg="#1a3a1a" width={2}>│</text>
+      <text fg="#22c55e">  ● complete</text>
+      {details && <text fg="#444">  {details}</text>}
     </box>
   );
 }
@@ -105,21 +161,26 @@ function DoneBlock({ event }: { event: ToolEvent }) {
 
 function CommitBlock({ event }: { event: ToolEvent }) {
   return (
-    <box flexDirection="row">
-      <text fg="#333" width={2}>│</text>
-      <text fg="#22c55e" width={2}>◆</text>
-      <text fg="#22c55e"><strong>commit</strong></text>
-      <text fg="#888"> {event.detail?.slice(0, 55)}</text>
+    <box flexDirection="row" backgroundColor="#0d1a0d">
+      <text fg="#1a3a1a" width={2}>│</text>
+      <text fg="#22c55e">  ◆ </text>
+      <text fg="#4ade80"><strong>commit</strong></text>
+      <text fg="#666">  {event.detail?.slice(0, 50)}</text>
     </box>
   );
 }
 
-// --- Slice boundaries ---
+// --- Slice boundaries with animated reveal ---
 
 function SliceStartBlock({ event }: { event: ToolEvent }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => { setVisible(true); }, []);
+
   return (
-    <box marginTop={1}>
-      <text fg="#f97316">┌── {event.detail} ──</text>
+    <box marginTop={1} opacity={visible ? 1 : 0}>
+      <text fg="#f97316">
+        ┌─── {event.detail} ───
+      </text>
     </box>
   );
 }
@@ -129,7 +190,9 @@ function SliceEndBlock({ event }: { event: ToolEvent }) {
   const icon = event.isError ? "✗" : "●";
   return (
     <box marginBottom={1}>
-      <text fg={color}>└── {icon} {event.detail} ──</text>
+      <text fg={color}>
+        └─── {icon} {event.detail} ───
+      </text>
     </box>
   );
 }
@@ -138,9 +201,9 @@ function SliceEndBlock({ event }: { event: ToolEvent }) {
 
 function ErrorBlock({ event }: { event: ToolEvent }) {
   return (
-    <box flexDirection="row">
-      <text fg="#333" width={2}>│</text>
-      <text fg="#ef4444"> ✗ {event.detail}</text>
+    <box flexDirection="row" backgroundColor="#1a0d0d">
+      <text fg="#4a1a1a" width={2}>│</text>
+      <text fg="#ef4444">  ✗ {event.detail}</text>
     </box>
   );
 }
@@ -148,7 +211,6 @@ function ErrorBlock({ event }: { event: ToolEvent }) {
 // --- Helpers ---
 
 function toolIcon(name: string): string {
-  // Simple ASCII icons — no emojis, clean in any terminal
   switch (name) {
     case "Read":  return "◇";
     case "Write": return "◈";
@@ -172,16 +234,12 @@ function toolColor(name: string): string {
 }
 
 function truncateDetail(detail: string, toolName: string): string {
-  // For Bash, show the command. For files, show the path.
-  const maxLen = 65;
+  const maxLen = 60;
   if (detail.length <= maxLen) return detail;
 
-  // Try to show just the filename for paths
   if (toolName === "Read" || toolName === "Write" || toolName === "Edit") {
     const parts = detail.split("/");
-    if (parts.length > 2) {
-      return "…/" + parts.slice(-2).join("/");
-    }
+    if (parts.length > 2) return "…/" + parts.slice(-2).join("/");
   }
 
   return detail.slice(0, maxLen - 1) + "…";
