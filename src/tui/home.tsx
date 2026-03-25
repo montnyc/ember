@@ -3,7 +3,7 @@ import type { AppState, PrdInfo, RunHistoryEntry } from "./types";
 
 export function HomeScreen({ state, onStartRun, onExit }: {
   state: AppState;
-  onStartRun: (prdId?: string) => void;
+  onStartRun: (maxSlices?: number) => void;
   onExit: () => void;
 }) {
   useKeyboard((key) => {

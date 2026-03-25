@@ -91,7 +91,8 @@ Commands:
   install-skill                 Install /ember-prd skill for Claude Code
 
 Options:
-  --clean                       Discard uncommitted changes before running`);
+  --clean                       Discard uncommitted changes before running
+  --tui                         Run inside the interactive TUI dashboard`);
 }
 
 // --- init ---
@@ -190,11 +191,19 @@ async function cmdAfk(args: string[]) {
   const projectRoot = await findProjectRoot();
   setGitRoot(projectRoot);
   await ensureEmberDirs(projectRoot);
-  await ensureCleanTree(args);
-  const config = await loadConfig(projectRoot);
 
+  const config = await loadConfig(projectRoot);
   const maxSlicesArg = parseArg(args, "--max-slices");
   const maxSlices = maxSlicesArg ? parseInt(maxSlicesArg, 10) : config.loop.maxAfkSlices;
+
+  // --tui flag: run inside the TUI instead of terminal mode
+  if (hasFlag(args, "--tui")) {
+    const { launchTui } = await import("./tui/index");
+    await launchTui(projectRoot, maxSlices);
+    return;
+  }
+
+  await ensureCleanTree(args);
 
   const interrupt = setupInterruptHandler();
   const startTimeMs = Date.now();

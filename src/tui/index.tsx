@@ -4,13 +4,12 @@ import { useState } from "react";
 import { HomeScreen } from "./home";
 import { RunScreen } from "./run";
 import type { AppState, ToolEvent, PrdInfo, SliceInfo } from "./types";
-import { syncState } from "../state";
+import { syncState, writeState } from "../state";
 import { loadConfig } from "../config";
 import { selectNextSlice } from "../select";
 import { executeSlice } from "../loop";
 import { createRunLog } from "../log";
-import { transitionSlice } from "../slices";
-import { writeState } from "../state";
+import { transitionSlice, createFixSlice } from "../slices";
 import { resetWorkingTree, hasUncommittedChanges, setGitRoot, getFullDiff } from "../git";
 import path from "node:path";
 
@@ -19,20 +18,17 @@ import path from "node:path";
 function App({ initialState, onExit, onStartRun, onPause, onSkip, onHome }: {
   initialState: AppState;
   onExit: () => void;
-  onStartRun: (prdId?: string) => void;
+  onStartRun: (maxSlices?: number) => void;
   onPause: () => void;
   onSkip: () => void;
   onHome: () => void;
 }) {
   const [state, setState] = useState(initialState);
-
-  // Expose setState so the runner bridge can push updates
   (globalThis as any).__emberTuiUpdate = setState;
 
   if (state.screen === "home") {
     return <HomeScreen state={state} onStartRun={onStartRun} onExit={onExit} />;
   }
-
   return <RunScreen state={state} onExit={onExit} onPause={onPause} onSkip={onSkip} onHome={onHome} />;
 }
 
@@ -54,7 +50,11 @@ function updateState(fn: (prev: AppState) => AppState) {
   if (updater) updater(fn);
 }
 
-// --- Build initial state from disk ---
+function pushEvent(event: ToolEvent) {
+  updateState((s) => ({ ...s, events: [...s.events, event] }));
+}
+
+// --- Build state from disk ---
 
 async function buildHomeState(projectRoot: string): Promise<AppState> {
   const state = await syncState(projectRoot);
@@ -100,23 +100,27 @@ async function buildHomeState(projectRoot: string): Promise<AppState> {
   };
 }
 
-// --- Run bridge: wire executeSlice to TUI events ---
+// --- Run loop inside TUI ---
+// Uses the SAME executeSlice from loop.ts as the CLI,
+// just intercepts print events for the TUI display.
 
-const NO_CHANGES_THRESHOLD = 2;
+const NO_CHANGES_THRESHOLD = 3;
+const CIRCUIT_BREAKER_THRESHOLD = 5;
+const MAX_FIX_ATTEMPTS = 3;
 
-async function runWithTui(projectRoot: string) {
+async function runAfkInTui(projectRoot: string, maxSlices: number) {
   const config = await loadConfig(projectRoot);
 
   // Clean tree if needed
   if (await hasUncommittedChanges()) {
-    updateState((s) => ({ ...s, events: [...s.events, { type: "text", detail: "Cleaning working tree...", timestamp: Date.now() }] }));
+    pushEvent({ type: "text", detail: "Cleaning working tree...", timestamp: Date.now() });
     await resetWorkingTree();
   }
 
   const emberState = await syncState(projectRoot);
 
-  // Build slice list for TUI
-  const slices: SliceInfo[] = Object.values(emberState.slices).map((s) => ({
+  // Build TUI slice list
+  const tuiSlices: SliceInfo[] = Object.values(emberState.slices).map((s) => ({
     id: s.id,
     kind: s.kind,
     title: s.title,
@@ -128,7 +132,7 @@ async function runWithTui(projectRoot: string) {
     ...s,
     screen: "run",
     mode: "running",
-    slices,
+    slices: tuiSlices,
     events: [],
     diff: "",
     completed: 0,
@@ -138,38 +142,36 @@ async function runWithTui(projectRoot: string) {
     currentSliceIndex: -1,
   }));
 
+  // Intercept runner's print events for TUI
+  const originalPrint = (globalThis as any).__emberPrintEvent;
+  (globalThis as any).__emberPrintEvent = (event: Record<string, unknown>) => {
+    const tuiEvent = streamEventToToolEvent(event);
+    if (tuiEvent) pushEvent(tuiEvent);
+  };
+
   let completed = 0;
   let failed = 0;
   let totalCost = 0;
-
-  // Override the runner's printStreamEvent to feed the TUI instead
-  const originalPrint = (globalThis as any).__emberPrintEvent;
-
-  (globalThis as any).__emberPrintEvent = (event: Record<string, unknown>) => {
-    const tuiEvent = streamEventToToolEvent(event);
-    if (tuiEvent) {
-      updateState((s) => ({ ...s, events: [...s.events, tuiEvent] }));
-    }
-  };
-
-  const maxSlices = config.loop.maxAfkSlices;
+  let consecutiveErrors = 0;
+  let pendingCheckFailure: string | null = null;
 
   for (let i = 0; i < maxSlices; i++) {
+    if (consecutiveErrors >= CIRCUIT_BREAKER_THRESHOLD) {
+      pushEvent({ type: "error", detail: `Circuit breaker: ${consecutiveErrors} consecutive errors.`, timestamp: Date.now() });
+      break;
+    }
+
     const freshState = await syncState(projectRoot);
     const slice = selectNextSlice(freshState);
 
     if (!slice) {
-      updateState((s) => ({
-        ...s,
-        events: [...s.events, { type: "text", detail: "All slices done (or blocked).", timestamp: Date.now() }],
-        mode: "finished",
-      }));
+      pushEvent({ type: "text", detail: "All slices done (or blocked).", timestamp: Date.now() });
       break;
     }
 
-    // Find slice index in TUI list
-    const sliceIdx = slices.findIndex((s) => s.id === slice.id);
+    const sliceIdx = tuiSlices.findIndex((s) => s.id === slice.id);
 
+    // Update TUI: mark slice as running
     updateState((s) => {
       const newSlices = [...s.slices];
       if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: "running" };
@@ -181,7 +183,7 @@ async function runWithTui(projectRoot: string) {
       };
     });
 
-    // Run the slice
+    // Run the real executeSlice from loop.ts
     const runId = `${Date.now()}`;
     const logger = createRunLog(projectRoot, runId);
 
@@ -197,33 +199,58 @@ async function runWithTui(projectRoot: string) {
     };
     await writeState(projectRoot, freshState);
 
-    const outcome = await executeSlice(freshState, slice, config, logger, projectRoot);
+    const result = await executeSlice(freshState, slice, config, logger, projectRoot, pendingCheckFailure ?? undefined);
+    pendingCheckFailure = null;
 
-    // Get diff after work
+    // Update diff
     const diff = await getFullDiff();
     if (diff.trim()) {
       updateState((s) => ({ ...s, diff }));
     }
 
-    if (outcome.status === "done") {
+    // Handle outcome
+    if (result.status === "done") {
+      consecutiveErrors = 0;
       completed++;
       totalCost += freshState.history[freshState.history.length - 1]?.costUsd ?? 0;
+
+      const sliceStatus: SliceInfo["status"] = result.checksPassed === false ? "failed" : "done";
+
       updateState((s) => {
         const newSlices = [...s.slices];
-        if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: "done" };
+        if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: sliceStatus };
         return {
           ...s,
           slices: newSlices,
           completed,
           totalCost,
-          events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} done ✓`, timestamp: Date.now() }],
+          events: [...s.events, {
+            type: "slice_end",
+            detail: result.checksPassed === false
+              ? `${slice.criterionIds[0]} — checks/eval failed, creating fix slice`
+              : `${slice.criterionIds[0]} done ✓`,
+            isError: result.checksPassed === false,
+            timestamp: Date.now(),
+          }],
         };
       });
-    } else if (outcome.status === "no_changes") {
+
+      // Create fix slice if needed
+      if (result.checksPassed === false && result.checkOutput) {
+        const fixCount = Object.keys(freshState.slices).filter((id) => id.includes(":fix-")).length;
+        if (fixCount < MAX_FIX_ATTEMPTS) {
+          const fixSlice = createFixSlice(slice, result.checkOutput, freshState.slices);
+          freshState.slices[fixSlice.id] = fixSlice;
+          await writeState(projectRoot, freshState);
+          pendingCheckFailure = result.checkOutput;
+          pushEvent({ type: "text", detail: `Created fix slice: ${fixSlice.id}`, timestamp: Date.now() });
+        }
+      }
+    } else if (result.status === "no_changes") {
+      consecutiveErrors = 0;
       slice.reviewIterations = (slice.reviewIterations ?? 0) + 1;
 
       if (slice.reviewIterations >= NO_CHANGES_THRESHOLD) {
-        // Auto-advance
         transitionSlice(freshState, slice.id, "done");
         const prd = freshState.prds[slice.prdId];
         if (prd) {
@@ -242,26 +269,18 @@ async function runWithTui(projectRoot: string) {
         updateState((s) => {
           const newSlices = [...s.slices];
           if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: "done" };
-          return {
-            ...s,
-            slices: newSlices,
-            completed,
-            events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} auto-advanced (no changes needed)`, timestamp: Date.now() }],
-          };
+          return { ...s, slices: newSlices, completed, events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} auto-advanced`, timestamp: Date.now() }] };
         });
       } else {
         updateState((s) => {
           const newSlices = [...s.slices];
           if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: "no_changes" };
-          return {
-            ...s,
-            slices: newSlices,
-            events: [...s.events, { type: "text", detail: `No changes (attempt ${slice.reviewIterations}/${NO_CHANGES_THRESHOLD})`, timestamp: Date.now() }],
-          };
+          return { ...s, slices: newSlices, events: [...s.events, { type: "text", detail: `No changes (${slice.reviewIterations}/${NO_CHANGES_THRESHOLD})`, timestamp: Date.now() }] };
         });
       }
     } else {
       // Error
+      consecutiveErrors++;
       failed++;
       if (slice.status === "running") {
         transitionSlice(freshState, slice.id, "failed");
@@ -271,12 +290,7 @@ async function runWithTui(projectRoot: string) {
       updateState((s) => {
         const newSlices = [...s.slices];
         if (sliceIdx >= 0) newSlices[sliceIdx] = { ...newSlices[sliceIdx], status: "failed" };
-        return {
-          ...s,
-          slices: newSlices,
-          failed,
-          events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} failed ✗`, isError: true, timestamp: Date.now() }],
-        };
+        return { ...s, slices: newSlices, failed, events: [...s.events, { type: "slice_end", detail: `${slice.criterionIds[0]} error ✗`, isError: true, timestamp: Date.now() }] };
       });
     }
 
@@ -285,9 +299,8 @@ async function runWithTui(projectRoot: string) {
     await logger.close();
   }
 
-  // Restore original print
+  // Restore print handler
   (globalThis as any).__emberPrintEvent = originalPrint;
-
   updateState((s) => ({ ...s, mode: "finished" }));
 }
 
@@ -300,18 +313,11 @@ function streamEventToToolEvent(event: Record<string, unknown>): ToolEvent | nul
 
     for (const block of message.content) {
       if (block.type === "tool_use") {
-        return {
-          type: "tool_use",
-          name: block.name,
-          detail: block.input?.command ?? block.input?.description?.slice(0, 100) ?? "",
-          timestamp: now,
-        };
+        return { type: "tool_use", name: block.name, detail: block.input?.command ?? block.input?.description?.slice(0, 100) ?? "", timestamp: now };
       }
       if (block.type === "text" && block.text) {
         const firstLine = block.text.split("\n")[0].slice(0, 120);
-        if (firstLine.trim()) {
-          return { type: "text", detail: firstLine, timestamp: now };
-        }
+        if (firstLine.trim()) return { type: "text", detail: firstLine, timestamp: now };
       }
     }
   }
@@ -327,12 +333,7 @@ function streamEventToToolEvent(event: Record<string, unknown>): ToolEvent | nul
   }
 
   if (event.type === "result") {
-    return {
-      type: "done",
-      cost: (event.cost_usd as number) ?? undefined,
-      durationSec: ((event.duration_ms as number) ?? 0) / 1000,
-      timestamp: now,
-    };
+    return { type: "done", cost: (event.cost_usd as number) ?? undefined, durationSec: ((event.duration_ms as number) ?? 0) / 1000, timestamp: now };
   }
 
   return null;
@@ -340,10 +341,9 @@ function streamEventToToolEvent(event: Record<string, unknown>): ToolEvent | nul
 
 // --- Entry ---
 
-export async function launchTui(projectRoot: string) {
+export async function launchTui(projectRoot: string, maxSlices?: number) {
   setGitRoot(projectRoot);
 
-  // Ensure .ember/ exists
   const emberDir = path.join(projectRoot, ".ember");
   await Bun.$`mkdir -p ${path.join(emberDir, "runs")}`.quiet();
   const gitignorePath = path.join(emberDir, ".gitignore");
@@ -365,13 +365,18 @@ export async function launchTui(projectRoot: string) {
     <App
       initialState={initialState}
       onExit={cleanExit}
-      onStartRun={() => { runWithTui(projectRoot); }}
-      onPause={() => { /* TODO: signal pause to runner */ }}
-      onSkip={() => { /* TODO: signal skip to runner */ }}
+      onStartRun={(max) => { runAfkInTui(projectRoot, max ?? maxSlices ?? 20); }}
+      onPause={() => {}}
+      onSkip={() => {}}
       onHome={async () => {
         const fresh = await buildHomeState(projectRoot);
         updateState(() => fresh);
       }}
     />
   );
+
+  // If maxSlices was passed (e.g. from CLI), start immediately
+  if (maxSlices) {
+    runAfkInTui(projectRoot, maxSlices);
+  }
 }
