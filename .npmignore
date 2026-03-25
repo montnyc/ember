@@ -1,0 +1,12 @@
+src/
+src/**
+__tests__/
+*.ts
+*.tsx
+tsconfig.json
+bun.lock
+.ember/
+.git/
+.gitignore
+node_modules/
+skill/
