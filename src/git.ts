@@ -58,3 +58,18 @@ export async function resetWorkingTree(): Promise<void> {
   await Bun.$`git -C ${_projectRoot} checkout HEAD -- .`.quiet();
   await Bun.$`git -C ${_projectRoot} clean -fd`.quiet();
 }
+
+/**
+ * Revert the most recent commit. Used when evaluator/checks fail after commit,
+ * so the fix slice starts from a clean baseline instead of patching on top.
+ */
+export async function revertLastCommit(): Promise<void> {
+  try {
+    await Bun.$`git -C ${_projectRoot} revert HEAD --no-edit`.quiet();
+    console.log(`  Reverted last commit to give fix slice a clean baseline.`);
+  } catch {
+    // Revert may fail if there are conflicts — fall back to doing nothing.
+    // The fix slice will just patch on top of the broken commit.
+    console.log(`  Could not revert last commit (conflicts?). Fix slice will patch.`);
+  }
+}

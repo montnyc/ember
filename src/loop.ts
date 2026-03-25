@@ -1,9 +1,10 @@
 import { spawnClaude } from "./runner";
 import { buildWorkPrompt } from "./prompts";
-import { getHead, commitAll, hasUncommittedChanges } from "./git";
+import { getHead, commitAll, hasUncommittedChanges, revertLastCommit } from "./git";
 import { writeMemory, renderMemory } from "./memory";
 import { runChecks } from "./checks";
 import { evaluateSlice } from "./evaluator";
+import { appendProgress } from "./progress";
 import { transitionSlice } from "./slices";
 import { writeState } from "./state";
 import type { EmberConfig, EmberState, SliceState } from "./types";
@@ -13,15 +14,20 @@ export type SliceOutcome = "done" | "no_changes" | "error";
 
 export interface SliceResult {
   status: SliceOutcome;
-  checksPassed: boolean | null; // null = checks not run
-  checkOutput: string | null;   // failure output for fix slices
+  checksPassed: boolean | null;
+  checkOutput: string | null;
 }
 
 const MAX_LEARNINGS = 20;
 
 /**
- * Execute a single slice: spawn Claude, check if it made changes, commit,
- * run checks, update memory.
+ * Execute a single slice:
+ * 1. Pre-flight check (catch existing failures before new work)
+ * 2. Spawn Claude with work prompt
+ * 3. Check for changes, commit
+ * 4. Run checks, evaluate with separate agent
+ * 5. If eval/checks fail: revert commit, return failure for fix slice
+ * 6. Update progress file, memory, state
  */
 export async function executeSlice(
   state: EmberState,
@@ -38,13 +44,30 @@ export async function executeSlice(
   const memory = renderMemory(state);
   const headBefore = await getHead();
 
+  // --- Pre-flight: run checks before work to catch existing failures ---
+  let preflightFailures: string | undefined;
+  if (config.checks.enabled && config.checks.default.length > 0 && !checkFailureContext) {
+    const preflight = await runChecks(config.checks.default, projectRoot);
+    if (!preflight.pass) {
+      preflightFailures = preflight.results
+        .filter((r) => r.exitCode !== 0)
+        .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
+        .join("\n---\n")
+        .slice(0, 3000);
+      console.log(`  Pre-flight checks failed — Claude will fix existing issues first.`);
+    }
+  }
+
   // --- Run Claude ---
   if (state.currentRun) state.currentRun.step = "work";
   await writeState(projectRoot, state);
 
   await logEvent(logger, "work-start", slice.id, {});
 
-  const prompt = buildWorkPrompt(slice, prd, memory, config, checkFailureContext);
+  const prompt = buildWorkPrompt(slice, prd, memory, config, {
+    checkFailureContext,
+    preflightFailures,
+  });
   const result = await spawnClaude(prompt, config, projectRoot, sessionId);
 
   await logEvent(logger, "work-end", slice.id, {
@@ -54,7 +77,7 @@ export async function executeSlice(
 
   if (result.exitCode !== 0) {
     console.error(`  Claude exited with code ${result.exitCode}`);
-    // Always update memory so next slice has context about the failure
+    await appendProgress(projectRoot, slice.id, `ERROR: Claude exited with code ${result.exitCode}`);
     await writeMemory(projectRoot, state);
     return { status: "error", checksPassed: null, checkOutput: null };
   }
@@ -65,6 +88,7 @@ export async function executeSlice(
 
   if (!hasCommits && !hasDirtyFiles) {
     console.log(`  No changes made.`);
+    await appendProgress(projectRoot, slice.id, "No changes — Claude reported criteria already satisfied.");
     await writeMemory(projectRoot, state);
     return { status: "no_changes", checksPassed: null, checkOutput: null };
   }
@@ -75,9 +99,8 @@ export async function executeSlice(
     console.log(`  Committed: ${commitHash.slice(0, 8)}`);
   }
 
-  // --- Extract learning from commit message ---
-  const commitMsg = `${slice.id}: ${slice.title}`;
-  state.learnings.push(commitMsg);
+  // --- Extract learning from commit ---
+  state.learnings.push(`${slice.id}: ${slice.title}`);
   if (state.learnings.length > MAX_LEARNINGS) {
     state.learnings = state.learnings.slice(-MAX_LEARNINGS);
   }
@@ -97,13 +120,15 @@ export async function executeSlice(
         .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
         .join("\n---\n")
         .slice(0, 5000); // cap at 5KB to fit in next prompt without bloating context
-      console.log(`  Checks FAILED`);
-    } else {
-      console.log(`  Checks passed`);
+      console.log(`  Checks FAILED — reverting commit for clean fix baseline.`);
+      await revertLastCommit();
+      await appendProgress(projectRoot, slice.id, `Checks failed after commit. Reverted. Creating fix slice.`);
+      return { status: "done", checksPassed: false, checkOutput };
     }
+    console.log(`  Checks passed.`);
   }
 
-  // --- Evaluate with separate agent (skeptical reviewer) ---
+  // --- Evaluate with separate agent ---
   console.log(`  Evaluating...`);
   const evalResult = await evaluateSlice(slice, prd, config, projectRoot);
 
@@ -112,9 +137,11 @@ export async function executeSlice(
     for (const issue of evalResult.issues.slice(0, 3)) {
       console.log(`    - ${issue.slice(0, 100)}`);
     }
-    // Combine eval issues with check output for the fix slice
     const evalOutput = evalResult.issues.join("\n");
     const combinedOutput = [checkOutput, evalOutput].filter(Boolean).join("\n---\n");
+    console.log(`  Reverting commit for clean fix baseline.`);
+    await revertLastCommit();
+    await appendProgress(projectRoot, slice.id, `Evaluator found issues: ${evalResult.issues[0]?.slice(0, 80)}`);
     return { status: "done", checksPassed: false, checkOutput: combinedOutput };
   }
 
@@ -138,8 +165,9 @@ export async function executeSlice(
   prd.status = allDone ? "completed" : "in_progress";
   if (slice.kind === "tracer") prd.tracerValidated = true;
 
-  // --- Always update memory ---
+  // --- Update memory + progress ---
   await writeMemory(projectRoot, state);
+  await appendProgress(projectRoot, slice.id, `Done. ${evalResult.summary}`);
 
   // --- Record history ---
   state.history.push({

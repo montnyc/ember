@@ -70,4 +70,26 @@ describe("buildWorkPrompt", () => {
     const prompt = buildWorkPrompt(slice, prd, "some memory", DEFAULT_CONFIG);
     expect(prompt).toContain("some memory");
   });
+
+  test("includes pre-flight failures when provided", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG, {
+      preflightFailures: "bun test: FAIL\nExpected true, got false",
+    });
+    expect(prompt).toContain("Existing Failures");
+    expect(prompt).toContain("fix first");
+    expect(prompt).toContain("Expected true, got false");
+  });
+
+  test("includes check failure context for fix slices", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG, {
+      checkFailureContext: "tsc: error TS2345",
+    });
+    expect(prompt).toContain("Previous Check/Eval Failures");
+    expect(prompt).toContain("TS2345");
+  });
+
+  test("includes cleanup instruction", () => {
+    const prompt = buildWorkPrompt(slice, prd, "", DEFAULT_CONFIG);
+    expect(prompt).toContain("remove any debug logs");
+  });
 });

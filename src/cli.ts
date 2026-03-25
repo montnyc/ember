@@ -11,8 +11,10 @@ import { createRunLog } from "./log";
 import { resetWorkingTree, hasUncommittedChanges, setGitRoot } from "./git";
 import type { EmberConfig, EmberState, SliceState } from "./types";
 
-/** After this many consecutive no-change results, auto-advance the slice. */
-const NO_CHANGES_THRESHOLD = 2;
+/** After this many consecutive no-change results, auto-advance the slice.
+ * Set to 3 (not 2) to reduce false positives — Claude must confirm 3 times
+ * that no changes are needed before we believe it. */
+const NO_CHANGES_THRESHOLD = 3;
 
 async function main() {
   const args = process.argv.slice(2);
@@ -399,7 +401,7 @@ async function runOneSlice(
     slice.reviewIterations++;
 
     if (slice.reviewIterations >= NO_CHANGES_THRESHOLD) {
-      console.log(`  Auto-advancing (verified ${slice.reviewIterations}x with no changes needed)`);
+      console.log(`  ⚠ Auto-advancing: Claude reported no changes needed ${slice.reviewIterations}x. Marking as done.`);
       transitionSlice(state, slice.id, "done");
 
       for (const criterionId of slice.criterionIds) {

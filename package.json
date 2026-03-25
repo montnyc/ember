@@ -1,6 +1,6 @@
 {
   "name": "@montnyc/ember",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "type": "module",
   "description": "PRD-driven autonomous coding loop tool",
   "bin": {
