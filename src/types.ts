@@ -4,7 +4,6 @@ export interface EmberConfig {
   runner: {
     type: "claude";
     model: string;
-    timeoutMs: number;
   };
   loop: {
     maxReviewIterations: number;

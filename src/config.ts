@@ -4,8 +4,7 @@ import type { EmberConfig } from "./types";
 export const DEFAULT_CONFIG: EmberConfig = {
   runner: {
     type: "claude",
-    model: "sonnet",
-    timeoutMs: 600_000, // 10 minutes
+    model: "opus",
   },
   loop: {
     maxReviewIterations: 3,

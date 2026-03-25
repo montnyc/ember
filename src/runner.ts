@@ -28,25 +28,11 @@ export async function spawnClaude(
     env: { ...process.env, CLAUDE_CODE_ENTRYPOINT: "ember" },
   });
 
-  // Timeout: kill the process if it runs too long
-  const timeoutMs = config.runner.timeoutMs;
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    console.error(`  Timeout after ${(timeoutMs / 1000 / 60).toFixed(0)}min — killing Claude process`);
-    proc.kill();
-  }, timeoutMs);
-
   const [collected, stderr] = await Promise.all([
     collectStreamEvents(proc.stdout),
     new Response(proc.stderr).text(),
   ]);
   const exitCode = await proc.exited;
-  clearTimeout(timer);
-
-  if (timedOut) {
-    return { exitCode: 124, output: "timeout", costUsd: collected.costUsd, durationMs: collected.durationMs };
-  }
 
   if (exitCode !== 0 && stderr.trim()) {
     console.error(`[runner] stderr: ${stderr.trim()}`);
