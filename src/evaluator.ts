@@ -1,4 +1,5 @@
 import { spawnClaude } from "./runner";
+import { extractJsonFromOutput } from "./parse-json";
 import { getFullDiff } from "./git";
 import type { EmberConfig, PrdState, SliceState } from "./types";
 
@@ -104,17 +105,7 @@ Rules:
 
 function parseEvalOutput(output: string): EvalResult {
   const trimmed = output.trim();
-
-  // Try to extract JSON
-  let jsonStr = trimmed;
-
-  const fenceMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenceMatch) jsonStr = fenceMatch[1].trim();
-
-  if (!jsonStr.startsWith("{")) {
-    const objMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (objMatch) jsonStr = objMatch[0];
-  }
+  const jsonStr = extractJsonFromOutput(trimmed);
 
   try {
     const parsed = JSON.parse(jsonStr);

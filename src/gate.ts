@@ -1,48 +1,10 @@
+import { extractJsonFromOutput, parseJsonObject } from "./parse-json";
 import type { GateVerdict, ProposedSlice, SliceKind, Priority } from "./types";
 
 export function parseGateVerdict(output: string): GateVerdict {
-  const jsonStr = extractJsonString(output);
-  const parsed = parseJson(jsonStr);
+  const jsonStr = extractJsonFromOutput(output);
+  const parsed = parseJsonObject(jsonStr, "gate verdict");
   return validateVerdict(parsed);
-}
-
-// --- Extraction ---
-
-function extractJsonString(output: string): string {
-  let str = output.trim();
-
-  // Strip markdown code fences if present
-  const fenceMatch = str.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-  if (fenceMatch) {
-    return fenceMatch[1].trim();
-  }
-
-  // Models sometimes wrap JSON in prose. Use a greedy match to find the
-  // outermost { ... } block. This is safe because gate output should contain
-  // exactly one top-level JSON object; nested braces are part of it.
-  if (!str.startsWith("{")) {
-    const objMatch = str.match(/\{[\s\S]*\}/);
-    if (objMatch) return objMatch[0];
-  }
-
-  return str;
-}
-
-// --- Parsing ---
-
-function parseJson(jsonStr: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch {
-    throw new Error(`Failed to parse gate verdict JSON: ${jsonStr.slice(0, 200)}`);
-  }
-
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error("Gate verdict is not an object");
-  }
-
-  return parsed as Record<string, unknown>;
 }
 
 // --- Validation ---

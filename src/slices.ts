@@ -49,14 +49,8 @@ export function createSliceFromProposal(
   proposal: ProposedSlice,
   existingSlices: Record<string, SliceState>
 ): SliceState {
-  let n = 1;
   const prefix = `${prdId}:${proposal.kind}-`;
-  for (const id of Object.keys(existingSlices)) {
-    if (id.startsWith(prefix)) {
-      const num = parseInt(id.slice(prefix.length), 10);
-      if (num >= n) n = num + 1;
-    }
-  }
+  const n = nextIdForPrefix(prefix, existingSlices);
 
   return {
     id: `${prefix}${n}`,
@@ -82,15 +76,8 @@ export function createFixSlice(
   checkOutput: string,
   existingSlices: Record<string, SliceState>
 ): SliceState {
-  // Find next fix number for this PRD
-  let n = 1;
   const prefix = `${originalSlice.prdId}:fix-`;
-  for (const id of Object.keys(existingSlices)) {
-    if (id.startsWith(prefix)) {
-      const num = parseInt(id.slice(prefix.length), 10);
-      if (num >= n) n = num + 1;
-    }
-  }
+  const n = nextIdForPrefix(prefix, existingSlices);
 
   const firstLine = checkOutput.split("\n").find((l) => l.trim())?.slice(0, 80) ?? "check failure";
 
@@ -143,4 +130,18 @@ export function transitionSlice(
   if (newStatus === "blocked" && opts?.blockReason) {
     slice.blockReason = opts.blockReason;
   }
+}
+
+// --- Helpers ---
+
+/** Find the next available number for a given ID prefix (e.g. "001:fix-" → 3 if fix-1 and fix-2 exist). */
+function nextIdForPrefix(prefix: string, existingSlices: Record<string, SliceState>): number {
+  let n = 1;
+  for (const id of Object.keys(existingSlices)) {
+    if (id.startsWith(prefix)) {
+      const num = parseInt(id.slice(prefix.length), 10);
+      if (num >= n) n = num + 1;
+    }
+  }
+  return n;
 }
