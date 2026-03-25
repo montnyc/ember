@@ -7,6 +7,8 @@ import { selectNextSlice } from "./select";
 import { transitionSlice, createFixSlice } from "./slices";
 import { executeSlice } from "./loop";
 import type { SliceResult } from "./loop";
+import { runAfkLoop } from "./afk-loop";
+import type { AfkReporter } from "./afk-loop";
 import { createRunLog } from "./log";
 import { resetWorkingTree, hasUncommittedChanges, setGitRoot } from "./git";
 import type { EmberConfig, EmberState, SliceState } from "./types";
@@ -206,80 +208,16 @@ async function cmdAfk(args: string[]) {
   await ensureCleanTree(args);
 
   const interrupt = setupInterruptHandler();
-  const startTimeMs = Date.now();
-  let completed = 0;
-  let totalCostUsd = 0;
-  let consecutiveErrors = 0;
-  let pendingCheckFailure: string | null = null; // check output from previous slice to feed into fix
-
-  const CIRCUIT_BREAKER_THRESHOLD = 5;
-  const MAX_FIX_ATTEMPTS = 3;
-
-  console.log(`\nEmber AFK mode — max ${maxSlices} slices`);
 
   try {
-    while (completed < maxSlices && !interrupt.stopping) {
-      // Circuit breaker: stop after too many consecutive errors
-      if (consecutiveErrors >= CIRCUIT_BREAKER_THRESHOLD) {
-        console.log(`\n⚠ Circuit breaker: ${consecutiveErrors} consecutive errors. Stopping.`);
-        break;
-      }
-
-      const state = await syncState(projectRoot);
-      const slice = selectNextSlice(state);
-
-      if (!slice) {
-        console.log("\nAll slices done (or blocked).");
-        break;
-      }
-
-      console.log(
-        `\n${"=".repeat(50)}\n  Slice ${completed + 1}/${maxSlices}: ${slice.id} [${slice.kind}]\n  ${slice.title}\n${"=".repeat(50)}`
-      );
-
-      const sliceResult = await runOneSlice(projectRoot, state, slice, config, pendingCheckFailure);
-      pendingCheckFailure = null; // consumed
-
-      if (interrupt.forceKill) break;
-
-      if (sliceResult.status === "done") {
-        consecutiveErrors = 0;
-        completed++;
-        const lastHistory = state.history[state.history.length - 1];
-        if (lastHistory?.costUsd) totalCostUsd += lastHistory.costUsd;
-
-        // If checks failed, create a fix slice for the next iteration
-        if (sliceResult.checksPassed === false && sliceResult.checkOutput) {
-          const fixCount = Object.keys(state.slices).filter((id) => id.includes(":fix-")).length;
-          if (fixCount < MAX_FIX_ATTEMPTS) {
-            const fixSlice = createFixSlice(slice, sliceResult.checkOutput, state.slices);
-            state.slices[fixSlice.id] = fixSlice;
-            await writeState(projectRoot, state);
-            pendingCheckFailure = sliceResult.checkOutput;
-            console.log(`  Created fix slice: ${fixSlice.id}`);
-          } else {
-            console.log(`  Checks failed but max fix attempts (${MAX_FIX_ATTEMPTS}) reached.`);
-          }
-        }
-      } else if (sliceResult.status === "no_changes") {
-        consecutiveErrors = 0;
-        completed++;
-      } else {
-        consecutiveErrors++;
-        await resetWorkingTree();
-      }
-    }
+    await runAfkLoop({
+      projectRoot,
+      maxSlices,
+      shouldStop: () => interrupt.stopping || interrupt.forceKill,
+      reporter: terminalReporter(),
+    });
   } finally {
     interrupt.cleanup();
-  }
-
-  const elapsedMinutes = ((Date.now() - startTimeMs) / 1000 / 60).toFixed(1);
-  console.log(`\n=== AFK Summary ===`);
-  console.log(`  Completed: ${completed}`);
-  console.log(`  Time:      ${elapsedMinutes} min`);
-  console.log(`  Cost:      $${totalCostUsd.toFixed(2)}`);
-  if (consecutiveErrors >= CIRCUIT_BREAKER_THRESHOLD) {
-    console.log(`  ⚠ Stopped due to ${consecutiveErrors} consecutive errors`);
   }
 }
 
@@ -554,6 +492,49 @@ async function ensureEmberDirs(projectRoot: string): Promise<void> {
   if (!(await Bun.file(gitignorePath).exists())) {
     await Bun.write(gitignorePath, "# Ember artifacts — do not track\n*\n");
   }
+}
+
+function terminalReporter(): AfkReporter {
+  return {
+    onStart(sliceCount) {
+      console.log(`\nEmber AFK mode — ${sliceCount} slices queued`);
+    },
+    onSliceStart(index, total, slice) {
+      console.log(`\n${"=".repeat(50)}\n  Slice ${index}/${total}: ${slice.id} [${slice.kind}]\n  ${slice.title}\n${"=".repeat(50)}`);
+    },
+    onSliceDone(slice, checksFailed, completed, totalCost) {
+      if (checksFailed) {
+        console.log(`  Checks/eval failed — fix slice will be created.`);
+      }
+    },
+    onSliceNoChanges(slice, attempt, threshold) {
+      console.log(`  No changes (attempt ${attempt}/${threshold})`);
+    },
+    onSliceAutoAdvanced(slice, completed) {
+      console.log(`  ⚠ Auto-advancing: Claude reported no changes needed 3x.`);
+    },
+    onSliceError(_slice, failed) {
+      console.log(`  Error — resetting working tree.`);
+    },
+    onFixSliceCreated(fixSliceId) {
+      console.log(`  Created fix slice: ${fixSliceId}`);
+    },
+    onCircuitBreaker(consecutiveErrors) {
+      console.log(`\n⚠ Circuit breaker: ${consecutiveErrors} consecutive errors. Stopping.`);
+    },
+    onAllDone() {
+      console.log("\nAll slices done (or blocked).");
+    },
+    onDiffUpdate() {},
+    onFinished(completed, failed, totalCost, elapsedMs) {
+      const elapsedMinutes = (elapsedMs / 1000 / 60).toFixed(1);
+      console.log(`\n=== AFK Summary ===`);
+      console.log(`  Completed: ${completed}`);
+      if (failed > 0) console.log(`  Failed:    ${failed}`);
+      console.log(`  Time:      ${elapsedMinutes} min`);
+      console.log(`  Cost:      $${totalCost.toFixed(2)}`);
+    },
+  };
 }
 
 async function ensureCleanTree(args: string[]): Promise<void> {
