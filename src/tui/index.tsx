@@ -14,13 +14,15 @@ import path from "node:path";
 
 // --- App component ---
 
-function App({ initialState, onExit, onStartRun, onPause, onSkip, onHome }: {
+function App({ initialState, onExit, onStartRun, onPause, onSkip, onHome, onPlan, onCreateDir }: {
   initialState: AppState;
   onExit: () => void;
   onStartRun: (maxSlices?: number) => void;
   onPause: () => void;
   onSkip: () => void;
   onHome: () => void;
+  onPlan: () => void;
+  onCreateDir: () => void;
 }) {
   const [state, setState] = useState(initialState);
   (globalThis as any).__emberTuiUpdate = setState;
@@ -31,6 +33,8 @@ function App({ initialState, onExit, onStartRun, onPause, onSkip, onHome }: {
       onStartRun={onStartRun}
       onExit={onExit}
       onSessions={() => setState((s) => ({ ...s, screen: "sessions" }))}
+      onPlan={onPlan}
+      onCreateDir={onCreateDir}
     />;
   }
   if (state.screen === "sessions") {
@@ -191,6 +195,19 @@ export async function launchTui(projectRoot: string, maxSlices?: number) {
       onPause={() => {}}
       onSkip={() => {}}
       onHome={async () => {
+        const fresh = await buildHomeState(projectRoot);
+        updateState(() => fresh);
+      }}
+      onPlan={async () => {
+        // Exit TUI, run plan command in terminal, then relaunch
+        cleanExit();
+        console.log("\nTo generate a PRD, run:\n");
+        console.log('  ember plan "describe what you want to build"\n');
+      }}
+      onCreateDir={async () => {
+        const prdDir = path.join(projectRoot, "docs", "prd");
+        await Bun.$`mkdir -p ${prdDir}`.quiet();
+        // Refresh home state
         const fresh = await buildHomeState(projectRoot);
         updateState(() => fresh);
       }}
