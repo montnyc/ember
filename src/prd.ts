@@ -76,6 +76,15 @@ function escapeRegex(str: string): string {
 export async function parseAllPrds(prdDir = DEFAULT_PRD_DIR): Promise<ParsedPrd[]> {
   const glob = new Glob("*.md");
   const fullDir = path.resolve(prdDir);
+
+  // Return empty if the PRD directory doesn't exist yet
+  try {
+    const stat = await Bun.$`test -d ${fullDir}`.quiet();
+    if (stat.exitCode !== 0) return [];
+  } catch {
+    return [];
+  }
+
   const files: string[] = [];
 
   for await (const file of glob.scan(fullDir)) {
