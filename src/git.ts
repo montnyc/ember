@@ -9,9 +9,13 @@ export function setGitRoot(projectRoot: string): void {
   _projectRoot = projectRoot;
 }
 
-export async function getHead(): Promise<string> {
-  const result = await Bun.$`git -C ${_projectRoot} rev-parse HEAD`.quiet();
-  return result.text().trim();
+export async function getHead(): Promise<string | null> {
+  try {
+    const result = await Bun.$`git -C ${_projectRoot} rev-parse HEAD`.quiet();
+    return result.text().trim();
+  } catch {
+    return null; // no commits yet
+  }
 }
 
 /**
@@ -19,7 +23,13 @@ export async function getHead(): Promise<string> {
  * Stages untracked files with intent-to-add first so new files show up.
  */
 export async function getFullDiff(): Promise<string> {
+  const head = await getHead();
   await Bun.$`git -C ${_projectRoot} add -N .`.quiet();
+  if (!head) {
+    // No commits yet — diff against empty tree
+    const result = await Bun.$`git -C ${_projectRoot} diff --cached`.quiet();
+    return result.text();
+  }
   const result = await Bun.$`git -C ${_projectRoot} diff HEAD`.quiet();
   return result.text();
 }
@@ -30,7 +40,7 @@ export async function commitAll(message: string): Promise<string | null> {
 
   await Bun.$`git -C ${_projectRoot} add -A`.quiet();
   await Bun.$`git -C ${_projectRoot} commit -m ${message}`.quiet();
-  return getHead();
+  return await getHead();
 }
 
 export async function hasUncommittedChanges(): Promise<boolean> {
@@ -55,7 +65,10 @@ export async function assertCleanWorkingTree(): Promise<void> {
  * Used after a failed slice to restore a clean tree before the next iteration.
  */
 export async function resetWorkingTree(): Promise<void> {
-  await Bun.$`git -C ${_projectRoot} checkout HEAD -- .`.quiet();
+  const head = await getHead();
+  if (head) {
+    await Bun.$`git -C ${_projectRoot} checkout HEAD -- .`.quiet();
+  }
   await Bun.$`git -C ${_projectRoot} clean -fd`.quiet();
 }
 
@@ -64,6 +77,9 @@ export async function resetWorkingTree(): Promise<void> {
  * so the fix slice starts from a clean baseline instead of patching on top.
  */
 export async function revertLastCommit(): Promise<void> {
+  const head = await getHead();
+  if (!head) return; // nothing to revert
+
   try {
     await Bun.$`git -C ${_projectRoot} revert HEAD --no-edit`.quiet();
     console.log(`  Reverted last commit to give fix slice a clean baseline.`);

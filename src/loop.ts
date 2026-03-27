@@ -19,15 +19,17 @@ export interface SliceResult {
 }
 
 const MAX_LEARNINGS = 20;
+const MAX_SAME_SESSION_RETRIES = 2;
 
 /**
  * Execute a single slice:
  * 1. Pre-flight check (catch existing failures before new work)
  * 2. Spawn Claude with work prompt
  * 3. Check for changes, commit
- * 4. Run checks, evaluate with separate agent
- * 5. If eval/checks fail: revert commit, return failure for fix slice
- * 6. Update progress file, memory, state
+ * 4. Run checks + evaluator
+ * 5. If checks/eval fail: feed failure back to SAME session (deny-and-continue)
+ * 6. Only revert after retries exhausted
+ * 7. Update progress file, memory, state
  */
 export async function executeSlice(
   state: EmberState,
@@ -45,23 +47,11 @@ export async function executeSlice(
   const headBefore = await getHead();
 
   // --- Pre-flight: run checks before work to catch existing failures ---
-  let preflightFailures: string | undefined;
-  if (config.checks.enabled && config.checks.default.length > 0 && !checkFailureContext) {
-    const preflight = await runChecks(config.checks.default, projectRoot);
-    if (!preflight.pass) {
-      preflightFailures = preflight.results
-        .filter((r) => r.exitCode !== 0)
-        .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
-        .join("\n---\n")
-        .slice(0, 3000);
-      console.log(`  Pre-flight checks failed — Claude will fix existing issues first.`);
-    }
-  }
+  const preflightFailures = await runPreflightChecks(config, projectRoot, checkFailureContext);
 
-  // --- Run Claude ---
+  // --- Initial Claude run ---
   if (state.currentRun) state.currentRun.step = "work";
   await writeState(projectRoot, state);
-
   await logEvent(logger, "work-start", slice.id, {});
 
   const prompt = buildWorkPrompt(slice, prd, memory, config, {
@@ -76,80 +66,183 @@ export async function executeSlice(
   });
 
   if (result.exitCode !== 0) {
-    console.error(`  Claude exited with code ${result.exitCode}`);
-    await appendProgress(projectRoot, slice.id, `ERROR: Claude exited with code ${result.exitCode}`);
-    await writeMemory(projectRoot, state);
-    return { status: "error", checksPassed: null, checkOutput: null };
+    return await handleClaudeError(result.exitCode, projectRoot, state, slice);
   }
 
   // --- Check for changes ---
-  const hasCommits = (await getHead()) !== headBefore;
-  const hasDirtyFiles = await hasUncommittedChanges();
-
-  if (!hasCommits && !hasDirtyFiles) {
-    console.log(`  No changes made.`);
+  if (await noChangesDetected(headBefore)) {
     await appendProgress(projectRoot, slice.id, "No changes — Claude reported criteria already satisfied.");
     await writeMemory(projectRoot, state);
     return { status: "no_changes", checksPassed: null, checkOutput: null };
   }
 
-  // --- Commit changes ---
-  const commitHash = await commitAll(`[ember:${slice.id}] ${slice.title}`);
-  if (commitHash) {
-    console.log(`  Committed: ${commitHash.slice(0, 8)}`);
-  }
+  // --- Commit + verify (with same-session retries) ---
+  return await commitAndVerify(
+    state, slice, config, logger, projectRoot, sessionId, headBefore
+  );
+}
 
-  // --- Extract learning from commit ---
-  state.learnings.push(`${slice.id}: ${slice.title}`);
-  if (state.learnings.length > MAX_LEARNINGS) {
-    state.learnings = state.learnings.slice(-MAX_LEARNINGS);
-  }
+// --- Deny-and-continue: commit, verify, retry in same session if needed ---
 
-  // --- Run checks (if enabled) ---
-  let checksPassed: boolean | null = null;
-  let checkOutput: string | null = null;
+async function commitAndVerify(
+  state: EmberState,
+  slice: SliceState,
+  config: EmberConfig,
+  logger: RunLogger,
+  projectRoot: string,
+  sessionId: string,
+  headBefore: string | null,
+): Promise<SliceResult> {
+  const prd = state.prds[slice.prdId];
+  if (!prd) throw new Error(`PRD ${slice.prdId} not found`);
 
-  if (config.checks.enabled && config.checks.default.length > 0) {
-    console.log(`  Running checks...`);
-    const checkResult = await runChecks(config.checks.default, projectRoot);
-    checksPassed = checkResult.pass;
-
-    if (!checkResult.pass) {
-      checkOutput = checkResult.results
-        .filter((r) => r.exitCode !== 0)
-        .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
-        .join("\n---\n")
-        .slice(0, 5000); // cap at 5KB to fit in next prompt without bloating context
-      console.log(`  Checks FAILED — reverting commit for clean fix baseline.`);
-      await revertLastCommit();
-      await appendProgress(projectRoot, slice.id, `Checks failed after commit. Reverted. Creating fix slice.`);
-      return { status: "done", checksPassed: false, checkOutput };
+  for (let attempt = 0; attempt <= MAX_SAME_SESSION_RETRIES; attempt++) {
+    // --- Commit ---
+    const commitHash = await commitAll(`[ember:${slice.id}] ${slice.title}`);
+    if (commitHash) {
+      console.log(`  Committed: ${commitHash.slice(0, 8)}`);
     }
-    console.log(`  Checks passed.`);
+
+    // --- Record learning ---
+    state.learnings.push(`${slice.id}: ${slice.title}`);
+    if (state.learnings.length > MAX_LEARNINGS) {
+      state.learnings = state.learnings.slice(-MAX_LEARNINGS);
+    }
+
+    // --- Run checks ---
+    const checkFailure = await runPostCommitChecks(config, projectRoot);
+
+    // --- Run evaluator ---
+    const evalFailure = !checkFailure
+      ? await runEvaluation(slice, prd, config, projectRoot)
+      : null;
+
+    const failure = checkFailure ?? evalFailure;
+
+    // --- All clear: mark done ---
+    if (!failure) {
+      return await markSliceDone(state, slice, prd, projectRoot, logger);
+    }
+
+    // --- Failed: can we retry in the same session? ---
+    const isLastAttempt = attempt >= MAX_SAME_SESSION_RETRIES;
+
+    if (isLastAttempt) {
+      console.log(`  Retries exhausted — reverting commit.`);
+      await revertLastCommit();
+      await appendProgress(projectRoot, slice.id, `Checks/eval failed after ${attempt + 1} attempts. Reverted.`);
+      return { status: "done", checksPassed: false, checkOutput: failure };
+    }
+
+    // --- Deny-and-continue: feed failure back to same session ---
+    console.log(`  Attempt ${attempt + 1}/${MAX_SAME_SESSION_RETRIES + 1} failed — retrying in same session...`);
+    const fixPrompt = buildFixPrompt(failure);
+    const fixResult = await spawnClaude(fixPrompt, config, projectRoot, sessionId);
+
+    if (fixResult.exitCode !== 0) {
+      console.error(`  Claude fix attempt exited with code ${fixResult.exitCode}`);
+      await revertLastCommit();
+      return { status: "done", checksPassed: false, checkOutput: failure };
+    }
+
+    // Check if Claude actually made changes
+    if (await noChangesDetected(await getHead())) {
+      console.log(`  Claude made no changes on retry — reverting.`);
+      await revertLastCommit();
+      return { status: "done", checksPassed: false, checkOutput: failure };
+    }
+
+    // Loop back to commit + verify
   }
 
-  // --- Evaluate with separate agent ---
+  // Should not reach here, but just in case
+  return { status: "error", checksPassed: null, checkOutput: null };
+}
+
+// --- Extracted helpers ---
+
+async function runPreflightChecks(
+  config: EmberConfig,
+  projectRoot: string,
+  checkFailureContext?: string
+): Promise<string | undefined> {
+  if (!config.checks.enabled || config.checks.default.length === 0 || checkFailureContext) {
+    return undefined;
+  }
+
+  const preflight = await runChecks(config.checks.default, projectRoot);
+  if (!preflight.pass) {
+    console.log(`  Pre-flight checks failed — Claude will fix existing issues first.`);
+    return preflight.results
+      .filter((r) => r.exitCode !== 0)
+      .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
+      .join("\n---\n")
+      .slice(0, 3000);
+  }
+  return undefined;
+}
+
+async function runPostCommitChecks(
+  config: EmberConfig,
+  projectRoot: string
+): Promise<string | null> {
+  if (!config.checks.enabled || config.checks.default.length === 0) return null;
+
+  console.log(`  Running checks...`);
+  const checkResult = await runChecks(config.checks.default, projectRoot);
+  if (checkResult.pass) {
+    console.log(`  Checks passed.`);
+    return null;
+  }
+
+  const output = checkResult.results
+    .filter((r) => r.exitCode !== 0)
+    .map((r) => `${r.command}:\n${r.stdout}\n${r.stderr}`)
+    .join("\n---\n")
+    .slice(0, 5000);
+  console.log(`  Checks FAILED.`);
+  return output;
+}
+
+async function runEvaluation(
+  slice: SliceState,
+  prd: import("./types").PrdState,
+  config: EmberConfig,
+  projectRoot: string
+): Promise<string | null> {
   console.log(`  Evaluating...`);
   const evalResult = await evaluateSlice(slice, prd, config, projectRoot);
 
-  if (!evalResult.passed && evalResult.issues.length > 0) {
+  if (evalResult.passed) {
+    console.log(`  Evaluation passed: ${evalResult.summary}`);
+    return null;
+  }
+
+  if (evalResult.issues.length > 0) {
     console.log(`  Evaluator found ${evalResult.issues.length} issue(s):`);
     for (const issue of evalResult.issues.slice(0, 3)) {
       console.log(`    - ${issue.slice(0, 100)}`);
     }
-    const evalOutput = evalResult.issues.join("\n");
-    const combinedOutput = [checkOutput, evalOutput].filter(Boolean).join("\n---\n");
-    console.log(`  Reverting commit for clean fix baseline.`);
-    await revertLastCommit();
-    await appendProgress(projectRoot, slice.id, `Evaluator found issues: ${evalResult.issues[0]?.slice(0, 80)}`);
-    return { status: "done", checksPassed: false, checkOutput: combinedOutput };
+    return evalResult.issues.join("\n");
   }
 
-  if (evalResult.passed) {
-    console.log(`  Evaluation passed: ${evalResult.summary}`);
-  }
+  return null;
+}
 
-  // --- Mark slice done ---
+async function noChangesDetected(headBefore: string | null): Promise<boolean> {
+  const headAfter = await getHead();
+  const hasCommits = headAfter !== null && headAfter !== headBefore;
+  const hasDirtyFiles = await hasUncommittedChanges();
+  return !hasCommits && !hasDirtyFiles;
+}
+
+async function markSliceDone(
+  state: EmberState,
+  slice: SliceState,
+  prd: import("./types").PrdState,
+  projectRoot: string,
+  logger: RunLogger
+): Promise<SliceResult> {
   transitionSlice(state, slice.id, "done");
 
   for (const criterionId of slice.criterionIds) {
@@ -165,22 +258,49 @@ export async function executeSlice(
   prd.status = allDone ? "completed" : "in_progress";
   if (slice.kind === "tracer") prd.tracerValidated = true;
 
-  // --- Update memory + progress ---
   await writeMemory(projectRoot, state);
-  await appendProgress(projectRoot, slice.id, `Done. ${evalResult.summary}`);
+  await appendProgress(projectRoot, slice.id, `Done.`);
 
-  // --- Record history ---
   state.history.push({
     runId: state.currentRun?.runId ?? "unknown",
     sliceId: slice.id,
     verdict: "done",
     summary: slice.title,
     completedAt: new Date().toISOString(),
-    costUsd: result.costUsd,
+    costUsd: null,
   });
 
   await writeState(projectRoot, state);
-  return { status: "done", checksPassed, checkOutput };
+  return { status: "done", checksPassed: true, checkOutput: null };
+}
+
+function buildFixPrompt(failureOutput: string): string {
+  const truncated = failureOutput.slice(0, 5000);
+  return `Your previous changes failed verification. Fix the issues and commit again.
+
+## Failure Output
+
+\`\`\`
+${truncated}
+\`\`\`
+
+Rules:
+1. Fix ONLY what the errors above describe — do not refactor or change anything else.
+2. Create a new git commit with your fix.
+3. Do not revert the previous commit — patch on top of it.
+`;
+}
+
+async function handleClaudeError(
+  exitCode: number,
+  projectRoot: string,
+  state: EmberState,
+  slice: SliceState
+): Promise<SliceResult> {
+  console.error(`  Claude exited with code ${exitCode}`);
+  await appendProgress(projectRoot, slice.id, `ERROR: Claude exited with code ${exitCode}`);
+  await writeMemory(projectRoot, state);
+  return { status: "error", checksPassed: null, checkOutput: null };
 }
 
 async function logEvent(
